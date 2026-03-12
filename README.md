@@ -1,26 +1,43 @@
-# LGPD Export — Standalone (Jira Server)
+# SHIELD — Anonimização de Issues e Triagem Diagnóstica LGPD
 
-Exportação anonimizada de issues do **Jira Server** em PDF, sem instalação de plugin.
-Compatível com Jira Server 8.x — funciona com `jiraproducao.totvs.com.br`.
+> **S**mart **H**andler for **I**ssue **E**xport with **L**inked **D**ata
 
-Inclui suporte opcional a **comentários Zendesk** (via proxy Jira, API direta ou automação de browser) e um módulo de **diagnóstico com IA** (Claude/Anthropic) para avaliar a qualidade da anonimização.
+Ferramenta CLI Node.js com dois módulos complementares para conformidade LGPD no Jira Server:
+
+- **Módulo 1 — Exportação:** gera PDFs anonimizados de issues do Jira Server sem instalação de plugin
+- **Módulo 2 — Diagnóstico:** avalia a qualidade da anonimização e produz um laudo técnico com análise de causa raiz via IA
+
+Compatível com Jira Server 8.x. Todo processamento ocorre **localmente** — nenhum dado pessoal é enviado a serviços externos durante a exportação.
 
 ---
 
 ## Como funciona
 
-```
-Você chama:
-  node src/index.js DMANQUALI-12311
+### Módulo 1 — Exportação Anonimizada
 
-O script:
+```
+node src/index.js DMANQUALI-12311
+
   1. Autentica via API REST do Jira (token pessoal ou usuário/senha)
   2. Busca a issue completa (campos + comentários Jira)
   3. Busca comentários Zendesk vinculados (3 estratégias em cascata)
-  4. Minera entidades em TODOS os textos (2 fases)
-  5. Substitui por tokens: [PESSOA-1], [EMPRESA-1], [EMAIL], [CPF]...
-  6. Gera o PDF em ./output/DMANQUALI-12311_LGPD_anonimizado.pdf
-  7. Registra metadados em ./output/audit.log
+  4. Fase 1 — Mineração: varre todos os textos para detectar entidades
+  5. Fase 2 — Substituição: aplica tokens [PESSOA-1], [EMPRESA-1], [CPF], [RG]...
+  6. Gera PDF em ./output/DMANQUALI-12311_LGPD_anonimizado.pdf
+  7. Registra metadados no audit.log (Art. 37 LGPD)
+```
+
+### Módulo 2 — Diagnóstico Inteligente (Auxiliador de Triagem)
+
+```
+node src/diagnostics.js DMANQUALI-12311
+
+  1. Extrai texto do PDF anonimizado
+  2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
+  3. Sanitiza o conteúdo antes de enviar ao LLM (nenhuma PII real sai do ambiente)
+  4. Envia código-fonte e contexto sanitizado ao LLM (fallback: Claude → Codex → Copilot → API)
+  5. Gera laudo com 9 seções: causa raiz, trechos de código, diff de correção, critérios de aceite
+  6. Salva em output/diagnostic_<ISSUE_KEY>_<timestamp>.md
 ```
 
 ---
@@ -180,11 +197,13 @@ lgpd-export-standalone/
 | Fonte | Detecta | Confiança |
 |---|---|---|
 | Campos estruturados | Assignee, Reporter, autores de comentários | Alta |
-| Bloco de assinatura | "Att, João Silva \| Gerente \| Acme Ltda" | Alta |
+| Bloco de assinatura | "Att, João da Silva \| Gerente \| Acme Ltda" | Alta |
 | Sufixo jurídico | "TechCorp Ltda", "DataBrasil S.A.", "Farmacêutica XYZ" | Alta |
 | Gatilho empresa | "cliente Acme", "reunião com a TechBrasil" | Média |
 | Gatilho pessoa | "gerente Bruno", "Dra. Ana Paula", "atribuído ao Ricardo" | Média |
-| Regex estrutural | CPF, CNPJ, e-mail, telefone, CEP | Determinístico |
+| Regex estrutural | CPF, CNPJ, RG, PIS/PASEP, placa, passaporte, título de eleitor, e-mail, telefone, CEP | Determinístico |
+
+> **Nomes compostos com preposição** são detectados corretamente: `João da Silva`, `Maria dos Santos`, `Ana de Oliveira e Souza`.
 
 ### Fluxo de 2 fases
 
@@ -246,8 +265,18 @@ Nenhum dado pessoal é registrado — apenas metadados da operação.
 | Art. 6 — Finalidade | ✅ Compartilhamento seguro sem exposição de dados pessoais |
 | Art. 7 — Base legal | ✅ Legítimo interesse do controlador |
 | Art. 12 — Anonimização | ✅ Tokens não permitem reidentificação |
-| Art. 33 — Transferência internacional | ✅ Nenhum dado enviado a terceiros |
+| Art. 33 — Transferência internacional | ✅ Exportação totalmente local, sem envio de dados a terceiros |
 | Art. 37 — Registro de operações | ✅ `output/audit.log` gerado automaticamente |
-| Art. 46 — Segurança técnica | ✅ Processamento em memória, sem persistência de dados pessoais |
-#   a n o n i m i z a c a o _ e _ t r i a g e m _ j i r a _ x _ i a  
- 
+| Art. 46 — Segurança técnica | ✅ Processamento em memória; diagnóstico sanitiza PII antes de qualquer chamada externa |
+
+---
+
+## Segurança no Módulo de Diagnóstico
+
+O diagnóstico foi projetado para **não vazar dados pessoais** ao LLM externo:
+
+- O texto do PDF é sanitizado (mesmas regex da pipeline) antes de entrar no prompt
+- Os exemplos dos achados são substituídos por `[REDACTED]` — o LLM recebe apenas tipo, severidade e contagem
+- O código-fonte do workspace nunca contém dados de clientes
+
+Isso garante conformidade LGPD mesmo quando a anonimização do PDF falhou parcialmente.
