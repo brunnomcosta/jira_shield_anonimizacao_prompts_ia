@@ -93,7 +93,12 @@ const SOURCE_MAP = {
   leaked_password: {
     file: 'src/nerDetector.js',
     lines: '25',
-    description: 'Padrão SENHA — senha/password/passwd/pwd seguido de valor não anonimizado',
+    description: 'Padrão SENHA/CREDENCIAL — senha, password, api_key, token, secret, etc. seguido de valor não anonimizado',
+  },
+  leaked_url_usuario: {
+    file: 'src/nerDetector.js',
+    lines: '28',
+    description: 'URL com segmento de usuário — /users/, /profile/, /perfil/, /u/ com identificador',
   },
   leaked_name_pessoa: {
     file: 'src/entityMap.js',
@@ -208,7 +213,7 @@ async function extractPdfText(pdfPath) {
 function localDetect(text) {
   const findings = [];
 
-  // Padrões PII — idênticos ao nerDetector.js (linhas 7-13)
+  // Padrões PII — espelham nerDetector.js (manter sincronizado)
   const PII_PATTERNS = [
     {
       type: 'leaked_email',
@@ -231,14 +236,24 @@ function localDetect(text) {
       severity: 'warning',
     },
     {
+      type: 'leaked_phone',
+      rx: /\+\d{1,3}[\s\-]?\(?\d{2}\)?[\s\-]?\d{4,5}[\s\-]?\d{4}\b/g,
+      severity: 'warning',
+    },
+    {
       type: 'leaked_cep',
       rx: /\b\d{5}[-–]\d{3}\b/g,
       severity: 'warning',
     },
     {
       type: 'leaked_password',
-      rx: /\b(?:senha|password|passwd|pwd)\s*[:=]\s*\S+/gi,
+      rx: /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)\s*[:=]\s*\S+/gi,
       severity: 'critical',
+    },
+    {
+      type: 'leaked_url_usuario',
+      rx: /https?:\/\/[^\s/]+\/(?:users?|perfil|profile|u|account|conta)\/[\w.%@+\-]{2,}/gi,
+      severity: 'warning',
     },
   ];
 
@@ -600,11 +615,14 @@ function sanitizeForLLM(text) {
     /\b\d{3}\.?\d{3}\.?\d{3}[-–]?\d{2}\b/g,
     /\b\d{2}\.?\d{3}\.?\d{3}\/?\.?\d{4}[-–]?\d{2}\b/g,
     /\(?\d{2}\)?\s?\d{4,5}[-–\s]?\d{4}\b/g,
+    /\+\d{1,3}[\s\-]?\(?\d{2}\)?[\s\-]?\d{4,5}[\s\-]?\d{4}\b/g,
     /\b\d{5}[-–]\d{3}\b/g,
     /\b\d{2}\.?\d{3}\.?\d{3}[-–]?[0-9Xx]\b/g,
     /\b\d{3}\.?\d{5}\.?\d{2}[-–]?\d\b/g,
     /\b[A-Z]{3}[-\s]?\d{4}\b/g,
     /\b[A-Z]{3}\d[A-Z]\d{2}\b/g,
+    /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)\s*[:=]\s*\S+/gi,
+    /https?:\/\/[^\s/]+\/(?:users?|perfil|profile|u|account|conta)\/[\w.%@+\-]{2,}/gi,
   ];
   return PII_PATTERNS.reduce((acc, rx) => {
     rx.lastIndex = 0;

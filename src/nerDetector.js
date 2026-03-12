@@ -21,6 +21,13 @@ const PATTERNS = [
   { rx: /\b\d{4}\s?\d{4}\s?\d{4}\b/g,                                           tag: '[TITULO_ELEITOR]' },
   // Passaporte brasileiro (XX000000 ou XX0000000)
   { rx: /\b[A-Z]{2}\d{6,7}\b/g,                                                 tag: '[PASSAPORTE]' },
+  // Senhas e credenciais explícitas em texto
+  //   "senha: valor", "password=abc123", "api_key: xyz", "token: abc", "secret: 123"
+  { rx: /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)\s*[:=]\s*\S+/gi, tag: '[SENHA]' },
+  // Telefone com prefixo internacional — "+55 11 99999-1234", "+55(11)98765-4321"
+  { rx: /\+\d{1,3}[\s\-]?\(?\d{2}\)?[\s\-]?\d{4,5}[\s\-]?\d{4}\b/g,            tag: '[TELEFONE]'   },
+  // URL com segmento de usuário — "https://app.com/users/joao.silva", "/profile/ana123"
+  { rx: /https?:\/\/[^\s/]+\/(?:users?|perfil|profile|u|account|conta)\/[\w.%@+\-]{2,}/gi, tag: '[URL_USUARIO]' },
 ];
 
 export function anonymizePatterns(text) {

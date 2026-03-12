@@ -44,7 +44,7 @@ export function extractSignatureBlock(text) {
   const lines = text.split('\n');
   let sigStartIndex = -1;
 
-  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 15); i--) {
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 40); i--) {
     const line = lines[i].trim();
     if (SIGNATURE_OPENERS.some((p) => p.test(line))) {
       sigStartIndex = i;

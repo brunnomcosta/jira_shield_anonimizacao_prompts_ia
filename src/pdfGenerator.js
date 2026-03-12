@@ -73,7 +73,7 @@ function drawDivider(doc, y, color = C.azulMedio) {
 }
 
 function checkPage(doc, y, needed = 25) {
-  if (y + needed > 280) { doc.addPage(); return 20; }
+  if (y + needed > 280) { doc.addPage(); return MARGIN; }
   return y;
 }
 
