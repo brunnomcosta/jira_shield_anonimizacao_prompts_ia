@@ -281,9 +281,10 @@ lgpd-export-standalone/
 | `[PASSAPORTE]` | Passaporte brasileiro |
 | `[TITULO_ELEITOR]` | Título de eleitor |
 | `[EMAIL]` | Endereços de e-mail |
-| `[TELEFONE]` | Telefones (celular e fixo) |
+| `[TELEFONE]` | Telefones (celular, fixo e internacional com `+55`) |
 | `[CEP]` | CEP |
-| `[SENHA]` | Senhas explícitas em texto (`senha:`, `password=`, `pwd:`, `passwd:`) |
+| `[SENHA]` | Senhas e credenciais explícitas: `senha:`, `password=`, `api_key=`, `token=`, `secret=`, `client_secret=`, `access_token=`, `auth_token=`, `bearer_token=`, `private_key=` |
+| `[URL_USUARIO]` | URLs com segmento de usuário: `/users/`, `/profile/`, `/perfil/`, `/u/`, `/account/`, `/conta/` |
 
 ### Fluxo de 2 fases
 
@@ -352,6 +353,7 @@ O diagnóstico produz até dois relatórios independentes com **9 seções padro
 |---|---|---|
 | `leaked_email` / `leaked_cpf` / `leaked_cnpj` / `leaked_password` | PII estrutural que escapou da pipeline | 🔴 Crítico |
 | `leaked_rg` / `leaked_pis` / `leaked_phone` / `leaked_cep` | Dados pessoais remanescentes | 🟡 Atenção |
+| `leaked_url_usuario` | URL com segmento de usuário (`/users/joao.silva`) não anonimizado | 🟡 Atenção |
 | `broken_token` | Token com colchete não fechado | 🟡 Atenção |
 | `fallback_token` | `[PESSOA-?]` — nome não registrado na Fase 1 | 🟡 Atenção |
 | `high_token_density` | Mais de 15% das palavras são tokens (super-anonimização) | 🔵 Info |
