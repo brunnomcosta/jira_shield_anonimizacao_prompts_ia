@@ -46,10 +46,12 @@ node src/diagnostics.js DMANQUALI-12311 --lgpd --business  # ambas
 
 Modo padrão / --business (análise de negócio):
   1. Lê o PDF anonimizado e os metadados estruturais do ticket (metadata.json)
-  2. Sanitiza conteúdo antes de enviar ao LLM
-  3. Reconstrói timeline de eventos a partir dos comentários
-  4. Analisa sintomas, hipóteses de causa raiz no produto e código do workspace
-  5. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
+  2. Alerta se JIRA_TOKEN / WORKSPACE_* estiverem ausentes e pede preenchimento para melhorar o resultado
+  3. Sanitiza conteúdo antes de enviar ao LLM
+  4. Reconstrói timeline de eventos a partir dos comentários
+  5. Analisa sintomas, hipótese mais provável de causa raiz no produto e código do workspace
+  6. Rejeita respostas do LLM sem causa principal ou sem evidência válida
+  7. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
 
 Modo --lgpd (qualidade da anonimização):
   1. Extrai texto do PDF anonimizado
@@ -118,7 +120,7 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 | `ANTHROPIC_API_KEY` | Chave da API Anthropic (fallback se Claude CLI não estiver instalado) |
 | `WORKSPACE_BACKEND_DIR` | Raiz do código-fonte back-end para análise cruzada de causa raiz |
 | `WORKSPACE_FRONTEND_DIR` | Raiz do código-fonte front-end para análise cruzada de causa raiz |
-| `WORKSPACE_EXTENSIONS` | Extensões de arquivo a incluir (padrão: `js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php`) |
+| `WORKSPACE_EXTENSIONS` | Extensões de arquivo a incluir (padrão: `js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp`) |
 
 ---
 
@@ -378,6 +380,11 @@ O diagnóstico foi projetado para **não vazar dados pessoais** ao LLM externo, 
 - O texto do PDF passa por sanitização com as mesmas regex da pipeline antes de entrar no prompt
 - Os exemplos dos achados (`findings.matches`) são substituídos por `[REDACTED]` — o LLM recebe apenas tipo, severidade e contagem
 - O código-fonte do workspace nunca contém dados de clientes
+- Antes de qualquer envio, o usuário recebe uma confirmação explícita mostrando PDF, metadados e quantidade de arquivos de workspace que serão enviados
+- Se `JIRA_TOKEN` ou `WORKSPACE_BACKEND_DIR` / `WORKSPACE_FRONTEND_DIR` estiverem ausentes ou inválidos, o CLI alerta e pede o preenchimento do `.env` antes de continuar
+- O prompt exige uma única causa principal (`Causa mais provável:` / `Causa raiz mais provável:`), proíbe inventar arquivos/linhas e limita as referências aos trechos realmente enviados
+- Se o LLM retornar uma resposta sem causa principal ou com referências fora do contexto permitido, a saída é corrigida uma vez; se continuar sem evidência válida, o relatório é bloqueado para evitar conteúdo especulativo
+- Referências `arquivo:linha` só são aceitas se o arquivo realmente fizer parte do contexto enviado; para workspaces, a linha também precisa estar dentro das faixas exibidas nos snippets
 
 ---
 

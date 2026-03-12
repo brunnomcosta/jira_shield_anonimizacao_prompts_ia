@@ -22,6 +22,7 @@ dotenv.config({ path: resolve(__dirname, '..', '.env') });
 
 import fs from 'fs';
 import os from 'os';
+import readline from 'readline';
 import { spawn } from 'child_process';
 import { createRequire } from 'module';
 import Anthropic from '@anthropic-ai/sdk';
@@ -39,8 +40,8 @@ const WORKSPACE_BACKEND_DIR  = process.env.WORKSPACE_BACKEND_DIR  ? resolve(proc
 const WORKSPACE_FRONTEND_DIR = process.env.WORKSPACE_FRONTEND_DIR ? resolve(process.env.WORKSPACE_FRONTEND_DIR) : null;
 
 // Extensões de arquivo aceitas para leitura do workspace
-const WORKSPACE_EXTENSIONS = (process.env.WORKSPACE_EXTENSIONS || 'js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php')
-  .split(',').map(e => `.${e.trim()}`);
+const WORKSPACE_EXTENSIONS = (process.env.WORKSPACE_EXTENSIONS || 'js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp')
+  .split(',').map(e => `.${e.trim().toLowerCase()}`);
 
 // Diretórios ignorados no scan recursivo
 const IGNORE_DIRS = new Set([
@@ -358,7 +359,7 @@ function walkDir(dir, results = []) {
     if (entry.isDirectory()) {
       if (!IGNORE_DIRS.has(entry.name)) walkDir(join(dir, entry.name), results);
     } else if (entry.isFile() && WORKSPACE_EXTENSIONS.includes(
-      entry.name.slice(entry.name.lastIndexOf('.'))
+      entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase()
     )) {
       results.push(join(dir, entry.name));
     }
@@ -367,72 +368,235 @@ function walkDir(dir, results = []) {
 }
 
 /**
- * Pontua a relevância de um arquivo para a issue com base em keywords do texto do PDF.
- * Usa apenas o nome do caminho (sem ler o arquivo).
+ * Escapa caracteres especiais de regex em uma string literal.
  */
-function scoreRelevance(filePath, keywords) {
-  const lower = filePath.toLowerCase().replace(/\\/g, '/');
-  return keywords.reduce((score, kw) => score + (lower.includes(kw) ? 1 : 0), 0);
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
- * Extrai palavras-chave relevantes do texto do PDF para priorizar arquivos do workspace.
+ * Extrai termos de busca categorizados do texto do ticket.
+ * Captura identificadores técnicos (camelCase, PascalCase, snake_case),
+ * rotas de API, mensagens de erro e palavras-chave gerais.
  */
-function extractKeywords(text) {
-  return [...new Set(
-    text
-      .replace(/\[[\w-]+\]/g, '')           // remove tokens LGPD
-      .match(/\b[a-zA-Z]{5,}\b/g) || []     // palavras com 5+ letras
-  )]
-    .map(w => w.toLowerCase())
-    .filter(w => !['https', 'lgpd', 'issue', 'campo', 'email', 'texto', 'valor'].includes(w))
-    .slice(0, 30);
+function extractSearchTerms(text) {
+  const clean = text.replace(/\[[\w-]+\]/g, ''); // remove tokens LGPD
+
+  const stopWords = new Set([
+    'https', 'lgpd', 'issue', 'campo', 'email', 'texto', 'valor', 'false',
+    'true', 'null', 'undefined', 'return', 'function', 'const', 'class',
+    'import', 'export', 'public', 'private', 'static', 'void', 'string',
+    'number', 'boolean', 'object', 'array', 'promise', 'async', 'await',
+    'throw', 'catch', 'error', 'where', 'which', 'there', 'their', 'about',
+  ]);
+
+  // Identificadores camelCase (métodos/variáveis): recalcularParcelas, fetchTicket
+  const camel = (clean.match(/\b[a-z][a-zA-Z0-9]{3,}\b/g) || [])
+    .filter(w => /[A-Z]/.test(w)); // exige ao menos uma maiúscula interna
+
+  // Identificadores PascalCase (classes/interfaces): ContractService, IssueKey
+  const pascal = (clean.match(/\b[A-Z][a-z][a-zA-Z0-9]{2,}\b/g) || []);
+
+  // snake_case (colunas, campos, variáveis Python/Ruby): desconto_condicional
+  const snake = (clean.match(/\b[a-z]{3,}(?:_[a-z]{2,}){1,}\b/g) || []);
+
+  // SCREAMING_CASE (constantes, enums): MAX_RETRIES, STATUS_OPEN
+  const screaming = (clean.match(/\b[A-Z]{2,}(?:_[A-Z0-9]{2,})+\b/g) || []);
+
+  // Rotas de API: /api/v1/contracts, /users/profile
+  const routes = (clean.match(/\/[a-zA-Z0-9_\-]{2,}(?:\/[a-zA-Z0-9_\-]{2,})+/g) || []);
+
+  // Palavras técnicas longas (sem ser identificadores compostos)
+  const words = [...new Set(
+    (clean.match(/\b[a-zA-Z]{6,}\b/g) || []).map(w => w.toLowerCase())
+  )].filter(w => !stopWords.has(w));
+
+  return {
+    // Peso 5 — identificadores exatos (maior precisão)
+    identifiers: [...new Set([...camel, ...pascal, ...snake, ...screaming])]
+      .filter(w => !stopWords.has(w.toLowerCase()))
+      .slice(0, 30),
+    // Peso 3 — rotas/caminhos de API
+    routes: [...new Set(routes)].slice(0, 10),
+    // Peso 1 — palavras gerais (maior recall, menor precisão)
+    words: words.slice(0, 30),
+  };
 }
 
 /**
- * Lê arquivos do workspace de back-end / front-end configurados em .env.
- * Retorna objeto { backend: [...], frontend: [...] } com os arquivos mais relevantes.
+ * Pontua a relevância de um arquivo pelo conteúdo usando regex nos termos extraídos.
+ * Retorna { score, matchedLines } onde matchedLines é array de índices de linha com hit.
+ */
+function scoreFileContent(content, terms) {
+  const lines = content.split('\n');
+  const matchedLines = [];
+  let score = 0;
+
+  for (const id of terms.identifiers) {
+    const rx = new RegExp(`\\b${escapeRegex(id)}\\b`, 'gi');
+    for (let i = 0; i < lines.length; i++) {
+      const hits = (lines[i].match(rx) || []).length;
+      if (hits > 0) { score += hits * 5; matchedLines.push(i); }
+    }
+  }
+
+  for (const route of terms.routes) {
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(route)) { score += 3; matchedLines.push(i); }
+    }
+  }
+
+  for (const word of terms.words) {
+    const rx = new RegExp(`\\b${escapeRegex(word)}\\b`, 'gi');
+    for (let i = 0; i < lines.length; i++) {
+      const hits = (lines[i].match(rx) || []).length;
+      if (hits > 0) { score += hits * 1; matchedLines.push(i); }
+    }
+  }
+
+  return { score, matchedLines: [...new Set(matchedLines)].sort((a, b) => a - b) };
+}
+
+/**
+ * Extrai trechos de código ao redor das linhas com match — igual ao "grep -C N".
+ * Une ranges sobrepostos e respeita um limite máximo de chars por arquivo.
+ *
+ * @param {string}   content      - Conteúdo completo do arquivo
+ * @param {number[]} matchedLines - Índices das linhas com hit (já ordenados)
+ * @param {number}   ctx          - Linhas de contexto antes/depois de cada hit
+ * @param {number}   maxSnippets  - Máximo de blocos distintos
+ * @param {number}   maxChars     - Limite de chars na saída
+ */
+function extractSnippets(content, matchedLines, ctx = 10, maxSnippets = 5, maxChars = 3000) {
+  const lines = content.split('\n');
+
+  if (matchedLines.length === 0) {
+    // Sem match de conteúdo — envia cabeçalho (imports, declarações iniciais)
+    const end = Math.min(35, lines.length);
+    return {
+      text: lines.slice(0, end).join('\n')
+        + '\n// [cabeçalho — sem ocorrências diretas dos termos da issue]',
+      lineRanges: end > 0 ? [{ start: 1, end }] : [],
+      totalLines: lines.length,
+    };
+  }
+
+  // Expande cada linha com hit para ±ctx linhas
+  const expanded = new Set();
+  for (const idx of matchedLines) {
+    for (let i = Math.max(0, idx - ctx); i <= Math.min(lines.length - 1, idx + ctx); i++) {
+      expanded.add(i);
+    }
+  }
+
+  // Agrupa índices contíguos em spans [start, end]
+  const sorted = [...expanded].sort((a, b) => a - b);
+  const spans = [];
+  let start = sorted[0], end = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] <= end + 4) { end = sorted[i]; }
+    else { spans.push([start, end]); start = end = sorted[i]; }
+  }
+  spans.push([start, end]);
+
+  // Monta saída respeitando maxChars
+  let out = '';
+  let chars = 0;
+  const includedRanges = [];
+  for (let si = 0; si < Math.min(spans.length, maxSnippets); si++) {
+    const [s, e] = spans[si];
+    const block = `// ── L${s + 1}–${e + 1} ──────────────────────\n` +
+                  lines.slice(s, e + 1).join('\n') + '\n';
+    if (chars + block.length > maxChars) {
+      out += `\n// [... ${spans.length - si} bloco(s) adicional(is) omitido(s) por limite de tamanho]`;
+      break;
+    }
+    out += (out ? '\n// ...\n\n' : '') + block;
+    chars += block.length;
+    includedRanges.push({ start: s + 1, end: e + 1 });
+  }
+
+  return {
+    text: out.trim(),
+    lineRanges: includedRanges,
+    totalLines: lines.length,
+  };
+}
+
+/**
+ * Lê arquivos do workspace em 3 passes — igual à estratégia do Claude Code / Codex:
+ *   Passe 1 — pré-filtro por nome de caminho (sem I/O, descarta irrelevantes rapidamente)
+ *   Passe 2 — score por conteúdo com regex dos termos extraídos do ticket
+ *   Passe 3 — extrai trechos ao redor dos hits (grep -C), não o arquivo inteiro
+ *
+ * Retorna { backend, frontend, configured, terms } onde terms são os termos usados.
  */
 function readWorkspaceFiles(pdfText) {
-  const keywords = extractKeywords(pdfText);
-  const result   = { backend: [], frontend: [], configured: false };
+  const terms  = extractSearchTerms(pdfText);
+  const result = { backend: [], frontend: [], configured: false, terms };
 
-  const MAX_FILES         = 15;   // máximo de arquivos por workspace
-  const MAX_CHARS_PER_FILE = 2500; // trunca arquivos grandes
-  const MAX_TOTAL_CHARS   = 18000; // limite total por workspace
+  const MAX_CANDIDATES  = 80;   // candidatos lidos no passe 2 (pré-filtro por path)
+  const MAX_FILES       = 15;   // arquivos incluídos no contexto final
+  const MAX_TOTAL_CHARS = 22000; // limite total de chars por workspace
+
+  const allTermsFlat = [...terms.identifiers, ...terms.words];
 
   function loadDir(dir, label) {
     if (!dir || !fs.existsSync(dir)) return [];
-
     result.configured = true;
     const allFiles = walkDir(dir);
 
-    // Ordena: mais relevante (por keywords no path) → mais recente
-    const scored = allFiles.map(f => ({
-      path: f,
-      score: scoreRelevance(f, keywords),
-      mtime: fs.statSync(f).mtimeMs,
-    })).sort((a, b) => b.score - a.score || b.mtime - a.mtime);
+    // ── Passe 1: score por path (sem I/O) ──────────────────────────────────
+    const byPath = allFiles.map(f => {
+      const lower = f.toLowerCase().replace(/\\/g, '/');
+      const ps = allTermsFlat.reduce((s, t) => s + (lower.includes(t.toLowerCase()) ? 2 : 0), 0);
+      return { path: f, pathScore: ps };
+    }).sort((a, b) => b.pathScore - a.pathScore);
 
+    const candidates = byPath.slice(0, MAX_CANDIDATES);
+
+    // ── Passe 2: score por conteúdo com regex ──────────────────────────────
+    const scored = [];
+    for (const { path: fp, pathScore } of candidates) {
+      try {
+        const content = fs.readFileSync(fp, 'utf-8');
+        const { score: contentScore, matchedLines } = scoreFileContent(content, terms);
+        scored.push({ path: fp, content, pathScore, contentScore, matchedLines,
+                      total: pathScore * 2 + contentScore });
+      } catch { /* ignora arquivos ilegíveis */ }
+    }
+    scored.sort((a, b) => b.total - a.total);
+
+    // ── Passe 3: extrai snippets ao redor dos matches ──────────────────────
     const picked = scored.slice(0, MAX_FILES);
     let totalChars = 0;
     const loaded = [];
 
-    for (const { path: fp, score } of picked) {
+    for (const { path: fp, content, pathScore, contentScore, matchedLines, total } of picked) {
       if (totalChars >= MAX_TOTAL_CHARS) break;
-      try {
-        let content = fs.readFileSync(fp, 'utf-8');
-        if (content.length > MAX_CHARS_PER_FILE) {
-          content = content.slice(0, MAX_CHARS_PER_FILE) + `\n// [... truncado — ${content.length} chars total]`;
-        }
-        totalChars += content.length;
-        // Caminho relativo ao dir raiz para não expor paths absolutos
-        const rel = fp.replace(dir, '').replace(/\\/g, '/').replace(/^\//, '');
-        loaded.push({ rel, content, score });
-      } catch { /* ignora arquivos ilegíveis */ }
+      const snippet = extractSnippets(content, matchedLines);
+      totalChars += snippet.text.length;
+      const rel = fp.replace(dir, '').replace(/\\/g, '/').replace(/^\//, '');
+      loaded.push({
+        rel,
+        content: snippet.text,
+        lineRanges: snippet.lineRanges,
+        totalLines: snippet.totalLines,
+        score: total,
+        pathScore,
+        contentScore,
+      });
     }
 
-    console.log(`   ${c.gray}→ ${label}: ${allFiles.length} arquivos encontrados, ${loaded.length} incluídos no contexto${c.reset}`);
+    const withHits = loaded.filter(f => f.contentScore > 0).length;
+    console.log(
+      `   ${c.gray}→ ${label}: ${allFiles.length} arq. encontrados, ` +
+      `${candidates.length} candidatos analisados, ${loaded.length} incluídos ` +
+      `(${withHits} com match de conteúdo)${c.reset}`
+    );
+    loaded.filter(f => f.contentScore > 0).slice(0, 5).forEach(f =>
+      console.log(`     ${c.gray}↳ ${f.rel}  [path:${f.pathScore} + conteúdo:${f.contentScore}]${c.reset}`)
+    );
     return loaded;
   }
 
@@ -522,6 +686,12 @@ Seu objetivo é entender o problema de negócio, reconstruir a sequência de eve
 - A descrição da issue e os comentários Jira são a fonte primária de análise.
 - Dados pessoais foram substituídos por tokens como [PESSOA-1], [EMPRESA-1] — isso é intencional e não faz parte do problema.
 - Os metadados estruturais (labels, versões, links) fornecem contexto adicional sobre o escopo do bug.
+- Não invente fatos, datas, componentes, endpoints, tabelas, arquivos ou linhas.
+- Use somente evidências presentes no ticket, nos metadados e nos snippets de código fornecidos.
+- Se a evidência não for suficiente, escreva explicitamente "Inconclusivo com os dados fornecidos".
+- Não cite arquivo:linha fora dos trechos de workspace fornecidos.
+- Quando um arquivo do workspace aparecer parcialmente, limite suas conclusões às linhas exibidas no snippet.
+- Apresente exatamente uma hipótese principal usando o rótulo obrigatório \`Causa mais provável:\`.
 
 ---
 
@@ -548,7 +718,7 @@ Uma linha. Título objetivo que descreve o problema de negócio. Ex: "Falha no c
 2 a 3 frases curtas e diretas. O que o cliente reportou, em qual contexto, e qual o impacto percebido por ele. Escreva como se fosse o parágrafo de abertura de um e-mail para um gerente — sem termos técnicos, sem hipóteses, apenas o fato relatado.
 
 ### Resumo da análise
-2 a 3 frases. O que a análise do ticket revelou: qual é a hipótese mais provável de causa raiz, em qual parte do sistema o problema provavelmente está localizado e o grau de confiança na hipótese (alta/média/baixa). Se houver mais de uma hipótese relevante, mencione a segunda brevemente.
+2 a 3 frases. O que a análise do ticket revelou: qual é a hipótese mais provável de causa raiz, em qual parte do sistema o problema provavelmente está localizado e o grau de confiança na hipótese (alta/média/baixa). Inclua obrigatoriamente uma linha no formato \`Causa mais provável: ...\`. Se houver mais de uma hipótese relevante, mencione a segunda brevemente.
 
 ### Resumo da solução proposta
 2 a 3 frases. O que precisa ser feito para resolver o problema — sem detalhes de implementação. Descreva o resultado esperado após a correção do ponto de vista do cliente. Inclua se há necessidade de comunicação ao cliente, rollback ou ação de dados.
@@ -564,12 +734,14 @@ Inclua: quando o problema começou, quando foi reportado, escalações, tentativ
 - Liste os sintomas descritos
 
 **Hipótese de causa raiz (o que provavelmente está errado no sistema):**
+- \`Causa mais provável:\` descreva uma única hipótese principal
+- \`Evidências principais:\` liste as evidências do ticket/metadados/código que sustentam a hipótese principal
 - Liste hipóteses ordenadas por probabilidade (mais provável primeiro)
 - Para cada hipótese, indique qual componente/módulo do sistema está envolvido
 
 ### Trechos de código relacionados
 ${workspaceInstruction}
-Para cada hipótese relevante, cite arquivo:linha e inclua o trecho em bloco de código. Se não houver workspace configurado, descreva onde no sistema o problema provavelmente está e quais padrões de código buscar.
+O primeiro item desta seção deve sustentar a \`Causa mais provável\`. Para cada hipótese relevante, cite arquivo:linha e inclua o trecho em bloco de código. Em cada item, explique em uma frase qual efeito observado no ticket esse trecho ajuda a explicar. Use somente referências presentes no contexto recebido. Se não houver evidência suficiente para localizar o ponto exato no código, escreva exatamente: \`Não foi possível localizar o ponto exato no código com o contexto atual.\`
 
 ### Passos para reproduzir e investigar
 Liste os passos concretos para:
@@ -605,7 +777,9 @@ function buildWorkspaceBlock(files, label) {
   if (!files || files.length === 0) return '';
   const header = `## Arquivos do ${label} (contexto da aplicação)`;
   const body = files.map(f =>
-    `### ${label}/${f.rel}\n\`\`\`\n${f.content}\n\`\`\``
+    `### ${label}/${f.rel}\n` +
+    `Linhas enviadas: ${formatLineRanges(f.lineRanges, f.totalLines)}\n` +
+    `\`\`\`\n${f.content}\n\`\`\``
   ).join('\n\n');
   return `${header}\n\n${body}\n\n`;
 }
@@ -692,6 +866,12 @@ Analise o PDF exportado por uma pipeline de anonimização e produza um relatór
 
 **IMPORTANTE:** A fonte primária de análise é a **descrição da issue** (seção principal abaixo).
 Os comentários Zendesk são fornecidos apenas como contexto auxiliar para entendimento do problema funcional — eles NÃO devem ser detalhados nas seções técnicas do relatório.
+- Não invente fatos, problemas, arquivos, linhas ou causas raízes fora do contexto fornecido.
+- Use somente a descrição da issue, os achados locais e os trechos de código recebidos.
+- Se a evidência não for suficiente, escreva explicitamente "Inconclusivo com os dados fornecidos".
+- Não cite arquivo:linha fora das referências presentes no prompt.
+- Quando um arquivo do workspace aparecer parcialmente, limite suas conclusões às linhas exibidas no snippet.
+- Apresente uma hipótese principal usando o rótulo obrigatório \`Causa raiz mais provável:\`.
 
 ---
 
@@ -764,12 +944,13 @@ Se não houver problemas técnicos, escreva que o PDF passou na análise, mas li
 
 ### Análise de causa raiz
 Para cada problema listado, explique:
+- \`Causa raiz mais provável:\` descreva uma única hipótese principal para o problema mais relevante
 - Qual etapa da pipeline falhou: **Fase 1** (mineração — entityMap, signatureExtractor, contextualExtractor) ou **Fase 2** (substituição — anonymizer.process(), anonymizePatterns())
 - Se é falha de **cobertura** (entidade não detectada) ou de **aplicação** (detectada mas não substituída)
 - O mecanismo técnico exato da falha com base no código-fonte fornecido
 
 ### Trechos de fonte relacionados
-Para cada causa raiz, cite o arquivo e linha exatos. Use o formato \`src/arquivo.js:linha\` e inclua o trecho de código em bloco \`\`\`js\`\`\`. Seja preciso nas referências de linha.
+O primeiro item desta seção deve sustentar a \`Causa raiz mais provável\`. Para cada causa raiz, cite o arquivo e linha exatos. Use o formato \`src/arquivo.js:linha\`, \`Backend/arquivo.ext:linha\` ou \`Frontend/arquivo.ext:linha\` e inclua o trecho de código em bloco \`\`\`js\`\`\`. Em cada item, explique em uma frase qual efeito observado o trecho ajuda a explicar. Use somente referências presentes no contexto recebido. Se não houver evidência suficiente para localizar o ponto exato no código, escreva exatamente: \`Não foi possível localizar o ponto exato no código com o contexto atual.\`
 ${workspaceInstruction}
 
 ### Sugestão de ajuste relacionada
@@ -1076,6 +1257,353 @@ function saveReport(content, issueKey, mode = '') {
   return outPath;
 }
 
+function hasValue(value, placeholders = []) {
+  const clean = String(value ?? '').trim();
+  return !!clean && !placeholders.includes(clean);
+}
+
+function hasJiraAuthConfigured() {
+  const token = process.env.JIRA_TOKEN;
+  const user  = process.env.JIRA_USER;
+  const pass  = process.env.JIRA_PASSWORD;
+
+  if (hasValue(token, ['seu_token_pessoal_aqui', 'seu_token_aqui'])) return true;
+  return hasValue(user, ['seu.usuario@empresa.com']) && hasValue(pass, ['sua_senha']);
+}
+
+function getConfigurationGaps() {
+  const gaps = [];
+
+  if (!hasJiraAuthConfigured()) {
+    gaps.push({
+      label: 'Credenciais Jira',
+      env: 'JIRA_TOKEN (ou JIRA_USER/JIRA_PASSWORD)',
+      impact: 'Sem credenciais Jira válidas você perde a capacidade de reexportar a issue e regenerar metadata.json para enriquecer o diagnóstico.',
+    });
+  }
+
+  if (!WORKSPACE_BACKEND_DIR) {
+    gaps.push({
+      label: 'Workspace Back-end',
+      env: 'WORKSPACE_BACKEND_DIR',
+      impact: 'A análise de negócio não consegue correlacionar o efeito reportado com fontes locais do back-end.',
+    });
+  } else if (!fs.existsSync(WORKSPACE_BACKEND_DIR)) {
+    gaps.push({
+      label: 'Workspace Back-end',
+      env: `WORKSPACE_BACKEND_DIR=${WORKSPACE_BACKEND_DIR}`,
+      impact: 'O diretório configurado não existe. Nenhum fonte local de back-end será considerado na análise.',
+    });
+  }
+
+  if (!WORKSPACE_FRONTEND_DIR) {
+    gaps.push({
+      label: 'Workspace Front-end',
+      env: 'WORKSPACE_FRONTEND_DIR',
+      impact: 'A análise de negócio não consegue correlacionar o efeito reportado com fontes locais do front-end.',
+    });
+  } else if (!fs.existsSync(WORKSPACE_FRONTEND_DIR)) {
+    gaps.push({
+      label: 'Workspace Front-end',
+      env: `WORKSPACE_FRONTEND_DIR=${WORKSPACE_FRONTEND_DIR}`,
+      impact: 'O diretório configurado não existe. Nenhum fonte local de front-end será considerado na análise.',
+    });
+  }
+
+  return gaps;
+}
+
+async function confirmConfigurationGaps(gaps) {
+  if (!gaps || gaps.length === 0) return true;
+
+  console.log(`${c.bold}${c.yellow}┌─────────────────────────────────────────────────────────────┐`);
+  console.log(`│  ⚠️  Configuração incompleta para melhor diagnóstico        │`);
+  console.log(`└─────────────────────────────────────────────────────────────┘${c.reset}`);
+  console.log();
+  console.log('  Preencha os itens abaixo no .env para melhorar a qualidade do resultado:');
+  console.log();
+
+  gaps.forEach((gap) => {
+    console.log(`  ${c.yellow}• ${gap.label}${c.reset}`);
+    console.log(`    ${c.gray}${gap.env}${c.reset}`);
+    console.log(`    ${gap.impact}`);
+  });
+
+  console.log();
+  console.log(`  ${c.gray}Sem esses dados, o LLM pode ficar restrito ao ticket/PDF e perder rastreabilidade até o código-fonte.${c.reset}`);
+  console.log();
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(`  Deseja continuar assim mesmo? ${c.bold}[s/N]${c.reset} `, (answer) => {
+      rl.close();
+      const yes = answer.trim().toLowerCase() === 's';
+      if (!yes) {
+        console.log();
+        console.log(`${c.yellow}⚠️  Execução interrompida para preenchimento do .env.${c.reset}`);
+        console.log(`  ${c.gray}Preencha as variáveis indicadas e execute novamente.${c.reset}`);
+        console.log();
+      }
+      resolve(yes);
+    });
+  });
+}
+
+function collectAllowedEvidencePaths(workspace, includePipeline = false) {
+  const allowed = new Map();
+
+  (workspace?.backend || []).forEach((f) => {
+    allowed.set(`Backend/${f.rel}`, {
+      lineRanges: f.lineRanges || [],
+      totalLines: f.totalLines || null,
+      kind: 'workspace',
+    });
+  });
+  (workspace?.frontend || []).forEach((f) => {
+    allowed.set(`Frontend/${f.rel}`, {
+      lineRanges: f.lineRanges || [],
+      totalLines: f.totalLines || null,
+      kind: 'workspace',
+    });
+  });
+
+  if (includePipeline) {
+    [
+      ['src/anonymizer.js', 'anonymizer'],
+      ['src/nerDetector.js', 'nerDetector'],
+      ['src/entityMap.js', 'entityMap'],
+      ['src/signatureExtractor.js', 'signatureExtractor'],
+      ['src/contextualExtractor.js', 'contextualExtractor'],
+    ].forEach(([ref, key]) => {
+      const content = readSourceFiles()[key] || '';
+      const totalLines = content.split('\n').length;
+      allowed.set(ref, {
+        lineRanges: totalLines > 0 ? [{ start: 1, end: totalLines }] : [],
+        totalLines,
+        kind: 'pipeline',
+      });
+    });
+  }
+
+  return allowed;
+}
+
+function formatLineRanges(ranges, totalLines = null) {
+  if (!ranges || ranges.length === 0) {
+    return totalLines ? `1-${totalLines}` : 'n/d';
+  }
+  return ranges.map((r) => `${r.start}-${r.end}`).join(', ');
+}
+
+function isLineAllowed(lineNumber, meta) {
+  if (!meta || !meta.lineRanges || meta.lineRanges.length === 0) return false;
+  return meta.lineRanges.some((range) => lineNumber >= range.start && lineNumber <= range.end);
+}
+
+function validateLLMReport(report, { mode, workspace, includePipeline = false }) {
+  const issues = [];
+  const allowedRefs = collectAllowedEvidencePaths(workspace, includePipeline);
+  const refRx = /\b((?:Backend|Frontend|src)\/[^\s:`]+?\.[A-Za-z0-9]+):(\d+)\b/g;
+  const refs = [...report.matchAll(refRx)].map((m) => ({
+    ref: m[1],
+    line: Number.parseInt(m[2], 10),
+  }));
+  const invalidRefs = refs.filter(({ ref }) => !allowedRefs.has(ref)).map(({ ref, line }) => `${ref}:${line}`);
+  const invalidLines = refs
+    .filter(({ ref, line }) => allowedRefs.has(ref) && !isLineAllowed(line, allowedRefs.get(ref)))
+    .map(({ ref, line }) => `${ref}:${line}`);
+
+  if (mode === 'business' && !/Causa mais provável:/i.test(report)) {
+    issues.push('missing_primary_cause');
+  }
+  if (mode === 'lgpd' && !/Causa raiz mais provável:/i.test(report)) {
+    issues.push('missing_primary_cause');
+  }
+
+  const workspaceRefsCount = (workspace?.backend?.length || 0) + (workspace?.frontend?.length || 0);
+  const requiresCodeEvidence = includePipeline || workspaceRefsCount > 0;
+  if (requiresCodeEvidence && allowedRefs.size > 0 && refs.length === 0) {
+    issues.push('missing_code_evidence');
+  }
+
+  if (invalidRefs.length > 0) {
+    issues.push('unsupported_file_refs');
+  }
+  if (invalidLines.length > 0) {
+    issues.push('out_of_range_line_refs');
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    refs,
+    invalidRefs,
+    invalidLines,
+    allowedRefs: [...allowedRefs.entries()].map(([ref, meta]) => ({
+      ref,
+      lineRanges: meta.lineRanges,
+      totalLines: meta.totalLines,
+      kind: meta.kind,
+    })),
+  };
+}
+
+function buildEvidenceRepairPrompt({ mode, basePrompt, report, validation }) {
+  const issueText = validation.issues.map((issue) => {
+    if (issue === 'missing_primary_cause') {
+      return mode === 'business'
+        ? '- O relatório não apresentou a linha obrigatória "Causa mais provável:".'
+        : '- O relatório não apresentou a linha obrigatória "Causa raiz mais provável:".';
+    }
+    if (issue === 'missing_code_evidence') {
+      return '- O relatório não vinculou a hipótese principal a referências arquivo:linha válidas.';
+    }
+    if (issue === 'unsupported_file_refs') {
+      return `- O relatório citou referências fora do contexto permitido: ${validation.invalidRefs.join(', ')}.`;
+    }
+    if (issue === 'out_of_range_line_refs') {
+      return `- O relatório citou linhas que não estão dentro das faixas enviadas ao LLM: ${validation.invalidLines.join(', ')}.`;
+    }
+    return `- ${issue}`;
+  }).join('\n');
+
+  const allowedRefs = validation.allowedRefs.length > 0
+    ? validation.allowedRefs.map((item) =>
+        `- ${item.ref} (linhas permitidas: ${formatLineRanges(item.lineRanges, item.totalLines)})`
+      ).join('\n')
+    : '- Nenhuma referência de código disponível neste contexto';
+
+  const primaryLabel = mode === 'business' ? 'Causa mais provável:' : 'Causa raiz mais provável:';
+  const insufficiencyRule = validation.allowedRefs.length > 0
+    ? '- Mesmo quando a conclusão principal for inconclusiva, ancore a análise em pelo menos uma referência arquivo:linha válida do contexto recebido.'
+    : '- Se não houver evidência suficiente para localizar o ponto exato no código, escreva exatamente: "Não foi possível localizar o ponto exato no código com o contexto atual."';
+
+  return `Reescreva o relatório abaixo corrigindo estritamente as violações de evidência.
+
+REGRAS OBRIGATÓRIAS:
+- Não invente fatos, datas, arquivos, linhas, endpoints, tabelas, classes ou componentes.
+- Use apenas o contexto do prompt original abaixo.
+- Mantenha a mesma estrutura/seções pedidas no prompt original.
+- Inclua obrigatoriamente uma linha iniciando com "${primaryLabel}".
+- Use somente referências arquivo:linha desta lista permitida:
+${allowedRefs}
+- Para arquivos de workspace, cite apenas linhas dentro das faixas permitidas acima.
+- Não extrapole comportamento fora das linhas enviadas; se precisar extrapolar, escreva que está inconclusivo.
+- ${insufficiencyRule.slice(2)}
+- Quando a evidência não sustentar uma causa principal específica, escreva "${primaryLabel} Inconclusivo com os dados fornecidos."
+
+VIOLAÇÕES IDENTIFICADAS:
+${issueText}
+
+PROMPT ORIGINAL:
+${basePrompt}
+
+RELATÓRIO A CORRIGIR:
+${report}`;
+}
+
+async function ensureEvidenceBasedReport({ mode, report, basePrompt, workspace, includePipeline = false }) {
+  const firstValidation = validateLLMReport(report, { mode, workspace, includePipeline });
+  if (firstValidation.ok) return report;
+
+  console.log(`   ${c.yellow}↳ Ajustando resposta do LLM para regras de evidência...${c.reset}`);
+  const repaired = await callClaude(
+    buildEvidenceRepairPrompt({ mode, basePrompt, report, validation: firstValidation })
+  );
+
+  const secondValidation = validateLLMReport(repaired, { mode, workspace, includePipeline });
+  if (!secondValidation.ok) {
+    throw new Error(
+      'A resposta do LLM não atendeu às regras de evidência e foi bloqueada para evitar conteúdo especulativo.\n' +
+      `Problemas restantes: ${secondValidation.issues.join(', ')}`
+    );
+  }
+
+  return repaired;
+}
+
+// ─── Confirmação antes do envio ao LLM ───────────────────────────────────────
+
+/**
+ * Exibe um resumo dos artefatos que serão enviados ao LLM e pede confirmação
+ * interativa ao usuário. Retorna true se confirmado, false se cancelado.
+ *
+ * @param {object} opts
+ * @param {string[]}      opts.modes        - Ex: ['Negócio'], ['LGPD'], ['LGPD', 'Negócio']
+ * @param {object}        opts.sections     - { mainContent, zendeskContent }
+ * @param {object|null}   opts.metadata     - metadata.json ou null
+ * @param {object}        opts.workspace    - { configured, backend, frontend }
+ * @param {object[]|null} opts.sourceFiles  - arquivos da pipeline (modo LGPD)
+ * @param {string}        opts.pdfPath      - caminho do PDF
+ */
+async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFiles, pdfPath }) {
+  const pdfName    = basename(pdfPath);
+  const mainChars  = sanitizeForLLM(sections.mainContent || '').length;
+  const zdChars    = sections.zendeskContent
+    ? sanitizeForLLM(sections.zendeskContent).length : 0;
+
+  const bkFiles  = workspace?.backend?.length  || 0;
+  const ftFiles  = workspace?.frontend?.length || 0;
+  const srcFiles = sourceFiles?.length         || 0;
+
+  const line = (label, value) =>
+    console.log(`  ${c.gray}${label.padEnd(32)}${c.reset}${value}`);
+
+  console.log(`${c.bold}${c.yellow}┌─────────────────────────────────────────────────────────────┐`);
+  console.log(`│  ⚠️  Confirmação de envio ao modelo de linguagem (LLM)        │`);
+  console.log(`└─────────────────────────────────────────────────────────────┘${c.reset}`);
+  console.log();
+  console.log(`  Os seguintes artefatos serão enviados ao LLM:`);
+  console.log();
+
+  line('Arquivo PDF (texto extraído):', `${pdfName}  (${mainChars.toLocaleString()} chars — texto sanitizado)`);
+
+  if (zdChars > 0)
+    line('Comentários Zendesk:', `${zdChars.toLocaleString()} chars (sanitizados)`);
+
+  if (metadata)
+    line('Metadados do ticket (JSON):', `labels, versões, sprint, links — sem dados pessoais`);
+
+  if (srcFiles > 0)
+    line('Código-fonte da pipeline:', `${srcFiles} arquivo(s) de src/ (nerDetector, anonymizer…)`);
+
+  if (bkFiles > 0)
+    line('Arquivos Backend:', `${bkFiles} arquivo(s) do workspace`);
+
+  if (ftFiles > 0)
+    line('Arquivos Frontend:', `${ftFiles} arquivo(s) do workspace`);
+  if (bkFiles === 0 && ftFiles === 0)
+    line('Workspaces locais:', 'nenhum trecho de código local será enviado');
+
+  console.log();
+  console.log(`  ${c.bold}Finalidade:${c.reset}`);
+  if (modes.includes('Negócio'))
+    console.log(`    ${c.cyan}• Análise de Negócio${c.reset} — identificar causa raiz do bug e propor solução`);
+  if (modes.includes('LGPD'))
+    console.log(`    ${c.cyan}• Análise LGPD${c.reset}       — avaliar qualidade da anonimização e detectar vazamentos`);
+  console.log();
+  console.log(`  ${c.gray}Dados pessoais (PII) são removidos antes do envio (substituídos por [REDACTED]).${c.reset}`);
+  console.log(`  ${c.gray}O destino é determinado pelo fallback: claude CLI → codex CLI → Copilot → API key.${c.reset}`);
+  console.log(`  ${c.gray}Saídas sem causa principal ou sem evidência válida são rejeitadas automaticamente.${c.reset}`);
+  console.log();
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  return new Promise((resolve) => {
+    rl.question(`  Deseja prosseguir? ${c.bold}[s/N]${c.reset} `, (answer) => {
+      rl.close();
+      const yes = answer.trim().toLowerCase() === 's';
+      if (!yes) {
+        console.log();
+        console.log(`${c.yellow}⚠️  Envio cancelado pelo usuário.${c.reset}`);
+        console.log(`  ${c.gray}Use --no-llm para gerar apenas a varredura local sem análise de IA.${c.reset}`);
+        console.log();
+      }
+      resolve(yes);
+    });
+  });
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1095,23 +1623,28 @@ async function main() {
   //   --lgpd             = só LGPD
   //   --business         = só negócio (explícito)
   //   --lgpd --business  = ambos
+  //   --no-llm           = só varredura local regex, sem envio ao LLM
+  const noLLM       = flags.includes('--no-llm');
   const runLGPD     = flags.includes('--lgpd');
   const runBusiness = flags.includes('--business') || !flags.includes('--lgpd');
 
   if (!arg) {
-    console.log(`${c.yellow}Uso:${c.reset}  node src/diagnostics.js [--lgpd] [--business] <ISSUE_KEY>`);
+    console.log(`${c.yellow}Uso:${c.reset}  node src/diagnostics.js [--lgpd] [--business] [--no-llm] <ISSUE_KEY>`);
     console.log();
     console.log(`${c.bold}Modos disponíveis:${c.reset}`);
     console.log(`  ${c.green}(padrão)${c.reset}           Análise de problema de negócio / bug do cliente`);
     console.log(`  ${c.green}--lgpd${c.reset}             Análise de qualidade de anonimização LGPD`);
     console.log(`  ${c.green}--business${c.reset}         Análise de problema de negócio (igual ao padrão)`);
     console.log(`  ${c.green}--lgpd --business${c.reset}  Ambas as análises`);
+    console.log(`  ${c.green}--no-llm${c.reset}           Apenas varredura local regex — não envia dados ao LLM`);
     console.log();
     console.log(`${c.gray}Sem argumento, usa o PDF mais recente em ${OUTPUT_DIR}${c.reset}`);
     console.log();
   }
 
-  const modeLabel = (runLGPD && runBusiness) ? 'LGPD + Negócio' : runLGPD ? 'LGPD' : 'Negócio';
+  const modeLabel = noLLM
+    ? 'Varredura local apenas (--no-llm)'
+    : (runLGPD && runBusiness) ? 'LGPD + Negócio' : runLGPD ? 'LGPD' : 'Negócio';
   console.log(`${c.gray}Modo: ${c.bold}${modeLabel}${c.reset}`);
   console.log();
 
@@ -1185,6 +1718,36 @@ async function main() {
     console.log(` ${c.green}OK${c.reset}`);
   }
 
+  const configGaps = getConfigurationGaps();
+  if (!noLLM) {
+    const ready = await confirmConfigurationGaps(configGaps);
+    if (!ready) process.exit(0);
+  }
+
+  // 6. Confirmar envio ao LLM (ou curto-circuitar se --no-llm)
+  if (noLLM) {
+    const header  = buildReportHeader(pdfPath, findings, numpages);
+    const noLLMNote = `> **Nota:** análise de IA não executada (flag \`--no-llm\`).\n\n`;
+    const savedPath = saveReport(header + noLLMNote, issueKey, 'lgpd');
+    console.log(`${c.green}✅ Relatório de varredura local salvo em: ${c.bold}${savedPath}${c.reset}`);
+    console.log();
+    return;
+  }
+
+  const modes = [
+    ...(runBusiness ? ['Negócio'] : []),
+    ...(runLGPD     ? ['LGPD']    : []),
+  ];
+  const confirmed = await confirmLLMSend({
+    modes,
+    sections,
+    metadata,
+    workspace,
+    sourceFiles: runLGPD ? sourceFiles : null,
+    pdfPath,
+  });
+  if (!confirmed) process.exit(0);
+
   console.log();
 
   // ── Análise LGPD (qualidade de anonimização) ─────────────────────────────
@@ -1194,6 +1757,13 @@ async function main() {
     try {
       const prompt = buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace);
       lgpdReport = await callClaude(prompt);
+      lgpdReport = await ensureEvidenceBasedReport({
+        mode: 'lgpd',
+        report: lgpdReport,
+        basePrompt: prompt,
+        workspace,
+        includePipeline: true,
+      });
       console.log(` ${c.green}OK${c.reset}`);
     } catch (err) {
       console.log();
@@ -1221,6 +1791,13 @@ async function main() {
     try {
       const prompt = buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace);
       businessReport = await callClaude(prompt);
+      businessReport = await ensureEvidenceBasedReport({
+        mode: 'business',
+        report: businessReport,
+        basePrompt: prompt,
+        workspace,
+        includePipeline: false,
+      });
       console.log(` ${c.green}OK${c.reset}`);
     } catch (err) {
       console.log();
