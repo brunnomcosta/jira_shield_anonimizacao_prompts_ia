@@ -4,10 +4,10 @@
 
 Ferramenta CLI Node.js com dois módulos complementares para conformidade LGPD no Jira Server:
 
-- **Módulo 1 — Exportação:** gera PDFs anonimizados de issues do Jira Server sem instalação de plugin
-- **Módulo 2 — Diagnóstico:** avalia a qualidade da anonimização e produz um laudo técnico com análise de causa raiz via IA
+- **Módulo 1 — Exportação:** gera PDFs anonimizados de issues do Jira Server sem instalação de plugin, em dois modos (somente Jira ou completo com Zendesk)
+- **Módulo 2 — Diagnóstico:** avalia a qualidade da anonimização e produz um laudo técnico com análise de causa raiz via IA, sem vazar dados pessoais ao LLM
 
-Compatível com Jira Server 8.x. Todo processamento ocorre **localmente** — nenhum dado pessoal é enviado a serviços externos durante a exportação.
+Compatível com Jira Server 8.x. A exportação ocorre **inteiramente no ambiente local** — nenhum dado pessoal é enviado a serviços externos.
 
 ---
 
@@ -15,16 +15,26 @@ Compatível com Jira Server 8.x. Todo processamento ocorre **localmente** — ne
 
 ### Módulo 1 — Exportação Anonimizada
 
+Dois modos disponíveis conforme necessidade:
+
 ```
+# Modo jira-only (rápido, sem browser):
+node src/index.js --jira-only DMANQUALI-12311
+
+  1. Autentica via API REST do Jira
+  2. Busca a issue completa (campos + comentários Jira)
+  3. Fase 1 — Mineração: varre todos os textos para detectar entidades
+  4. Fase 2 — Substituição: aplica tokens [PESSOA-1], [EMPRESA-1], [CPF], [RG]...
+  5. Gera PDF em ./output/DMANQUALI-12311_LGPD_anonimizado.pdf
+  6. Registra metadados no audit.log (Art. 37 LGPD)
+
+# Modo completo (padrão):
 node src/index.js DMANQUALI-12311
 
-  1. Autentica via API REST do Jira (token pessoal ou usuário/senha)
-  2. Busca a issue completa (campos + comentários Jira)
-  3. Busca comentários Zendesk vinculados (3 estratégias em cascata)
-  4. Fase 1 — Mineração: varre todos os textos para detectar entidades
-  5. Fase 2 — Substituição: aplica tokens [PESSOA-1], [EMPRESA-1], [CPF], [RG]...
-  6. Gera PDF em ./output/DMANQUALI-12311_LGPD_anonimizado.pdf
-  7. Registra metadados no audit.log (Art. 37 LGPD)
+  Igual ao anterior + busca comentários Zendesk vinculados em cascata:
+    Estratégia 1: proxy via plugin Jira (sem credenciais extras)
+    Estratégia 2: API direta do Zendesk (ZENDESK_* no .env)
+    Estratégia 3: browser com sessão SSO ativa (Chrome ou Edge)
 ```
 
 ### Módulo 2 — Diagnóstico Inteligente (Auxiliador de Triagem)
@@ -34,9 +44,10 @@ node src/diagnostics.js DMANQUALI-12311
 
   1. Extrai texto do PDF anonimizado
   2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
-  3. Sanitiza o conteúdo antes de enviar ao LLM (nenhuma PII real sai do ambiente)
-  4. Envia código-fonte e contexto sanitizado ao LLM (fallback: Claude → Codex → Copilot → API)
-  5. Gera laudo com 9 seções: causa raiz, trechos de código, diff de correção, critérios de aceite
+  3. Sanitiza conteúdo antes de enviar ao LLM (nenhuma PII real sai do ambiente)
+  4. Envia código-fonte e contexto sanitizado ao LLM
+     (fallback automático: Claude CLI → Codex CLI → GitHub Copilot → API key)
+  5. Gera laudo com 9 seções padronizadas
   6. Salva em output/diagnostic_<ISSUE_KEY>_<timestamp>.md
 ```
 
@@ -44,10 +55,9 @@ node src/diagnostics.js DMANQUALI-12311
 
 ## Pré-requisitos
 
-- Node.js 18 LTS ou superior → https://nodejs.org
-- Acesso à internet para instalar as dependências (`npm install`)
-- Acesso ao Jira (mesmo acesso que você já usa no browser)
-- *(Opcional)* Google Chrome ou Microsoft Edge instalado — necessário apenas para a estratégia de extração Zendesk via browser
+- Node.js 18 LTS ou superior
+- Acesso ao Jira Server (mesmo acesso que você usa no browser)
+- *(Apenas modo completo)* Google Chrome ou Microsoft Edge com sessão Zendesk ativa
 
 ---
 
@@ -82,7 +92,7 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 | `JIRA_PASSWORD` | Senha (fallback para versões antigas do Jira) |
 | `OUTPUT_DIR` | Pasta de saída dos PDFs (padrão: `./output`) |
 
-### Zendesk (opcional)
+### Zendesk (opcional — apenas modo completo)
 
 | Variável | Descrição |
 |---|---|
@@ -95,21 +105,20 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 
 | Variável | Descrição |
 |---|---|
-| `ANTHROPIC_API_KEY` | Chave da API Anthropic para o módulo de diagnóstico |
-| `WORKSPACE_BACKEND_DIR` | Raiz do código-fonte back-end para análise cruzada |
-| `WORKSPACE_FRONTEND_DIR` | Raiz do código-fonte front-end para análise cruzada |
+| `ANTHROPIC_API_KEY` | Chave da API Anthropic (fallback se Claude CLI não estiver instalado) |
+| `WORKSPACE_BACKEND_DIR` | Raiz do código-fonte back-end para análise cruzada de causa raiz |
+| `WORKSPACE_FRONTEND_DIR` | Raiz do código-fonte front-end para análise cruzada de causa raiz |
 | `WORKSPACE_EXTENSIONS` | Extensões de arquivo a incluir (padrão: `js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php`) |
 
 ---
 
-## Gerar Personal Access Token (recomendado)
+## Gerar Personal Access Token no Jira
 
-1. Acesse: `https://jiraproducao.totvs.com.br`
+1. Acesse o Jira Server da sua instância
 2. Clique no seu avatar → **Profile**
 3. No menu lateral: **Personal Access Tokens**
-4. Clique em **Create token**
-5. Nome: "LGPD Export" — sem expiração ou 1 ano
-6. Copie o token e cole no `.env` como `JIRA_TOKEN`
+4. Clique em **Create token** → Nome: "SHIELD" — sem expiração ou 1 ano
+5. Copie o token e cole no `.env` como `JIRA_TOKEN`
 
 ---
 
@@ -124,6 +133,9 @@ node src/index.js --jira-only DMANQUALI-12311
 
 # ou via npm:
 npm run export:jira -- DMANQUALI-12311
+
+# múltiplas issues:
+node src/index.js --jira-only DMANQUALI-12311 DMANQUALI-12312
 ```
 
 ### Modo 2 — Completo com Zendesk (padrão)
@@ -135,19 +147,12 @@ node src/index.js DMANQUALI-12311
 
 # ou via npm:
 npm run export -- DMANQUALI-12311
-```
 
-### Exportar várias issues de uma vez
-
-```bash
-# Apenas Jira
-node src/index.js --jira-only DMANQUALI-12311 DMANQUALI-12312
-
-# Completo com Zendesk
+# múltiplas issues:
 node src/index.js DMANQUALI-12311 DMANQUALI-12312 DMANQUALI-12313
 ```
 
-### Executar diagnóstico de qualidade da anonimização
+### Diagnóstico de qualidade da anonimização
 
 ```bash
 node src/diagnostics.js DMANQUALI-12311
@@ -156,22 +161,32 @@ node src/diagnostics.js DMANQUALI-12311
 npm run diagnose -- DMANQUALI-12311
 ```
 
-> Analisa o PDF gerado e o código-fonte (se `WORKSPACE_*` configurado) para avaliar riscos de reidentificação. O módulo de diagnóstico **não requer** Zendesk nem browser.
+> Não requer Zendesk nem browser. Funciona com `claude` CLI instalado (Claude Code), Codex CLI, GitHub Copilot (`gh` CLI) ou `ANTHROPIC_API_KEY` no `.env`.
 
-### Saída esperada no terminal
+### Referência de scripts npm
+
+| Script | Comando equivalente | Descrição |
+|---|---|---|
+| `npm run export -- KEY` | `node src/index.js KEY` | Exportação completa (Jira + Zendesk) |
+| `npm run export:jira -- KEY` | `node src/index.js --jira-only KEY` | Exportação apenas Jira, sem browser |
+| `npm run diagnose -- KEY` | `node src/diagnostics.js KEY` | Diagnóstico de anonimização com IA |
+| `npm run setup` | `node src/setup.js` | Assistente interativo de configuração |
+
+### Saída esperada no terminal (modo jira-only)
 
 ```
-╔═══════════════════════════════════╗
-║   JIRA LGPD Export — Standalone   ║
-╚═══════════════════════════════════╝
+╔══════════════════════════════════════════╗
+║   SHIELD — LGPD Export (Jira Server)     ║
+╚══════════════════════════════════════════╝
+
+ℹ️  Modo: jira-only — Zendesk desabilitado
 
 🔌  Conectando em https://jiraproducao.totvs.com.br...
 ✅  Jira Server 8.20.20 — conexão OK
 
 ⏳  Buscando DMANQUALI-12311...
 ✅  Issue encontrada: [TRIAR] QIPA215 - LGERSLABOP
-🎫  Buscando Zendesk Comments (ticket #26518424)...
-✅  3 Zendesk comment(s) via proxy Jira
+ℹ️  Modo jira-only — Zendesk ignorado
 🔒  Aplicando anonimização LGPD...
 📊  Entidades detectadas: 3 pessoa(s), 1 empresa(s)
 📄  Gerando PDF...
@@ -192,23 +207,24 @@ lgpd-export-standalone/
 ├── .gitignore
 ├── package.json
 ├── README.md
-├── output/                   # PDFs gerados aqui
+├── output/                   # PDFs e laudos gerados aqui
 │   ├── DMANQUALI-12311_LGPD_anonimizado.pdf
+│   ├── diagnostic_DMANQUALI-12311_2026-03-12T10-00-00.md
 │   └── audit.log             # Log de auditoria (Art. 37 LGPD)
 └── src/
-    ├── index.js              # CLI principal — orquestra o fluxo completo
+    ├── index.js              # CLI principal — dois modos: jira-only e completo
     ├── setup.js              # Assistente interativo de configuração
     ├── jiraClient.js         # Cliente REST para Jira Server 8.x
     ├── anonymizer.js         # Orquestrador das 2 fases de anonimização
     ├── entityMap.js          # Mapa de tokens consistentes ([PESSOA-1], [EMPRESA-1])
-    ├── signatureExtractor.js # Detecta blocos de assinatura (alta confiança)
-    ├── contextualExtractor.js# Detecta entidades por palavras-gatilho
-    ├── nerDetector.js        # Regex para CPF/CNPJ/e-mail/telefone/CEP
+    ├── signatureExtractor.js # Detecta blocos de assinatura com nomes compostos
+    ├── contextualExtractor.js# Detecta entidades por palavras-gatilho e preposições
+    ├── nerDetector.js        # Regex para CPF/CNPJ/RG/PIS/placa/passaporte/e-mail/CEP
     ├── pdfGenerator.js       # Gera PDF com jsPDF
     ├── zendeskClient.js      # Cliente REST para a API do Zendesk
     ├── browserExtractor.js   # Extração Zendesk via automação de browser (Playwright)
     ├── probeEndpoint.js      # Sonda endpoints Zendesk no Jira (estratégia proxy)
-    ├── diagnostics.js        # Diagnóstico de qualidade com IA (Anthropic)
+    ├── diagnostics.js        # Diagnóstico de qualidade com IA — LLM-safe
     └── debugBrowser.js       # Utilitário de debug da extração via browser
 ```
 
@@ -225,27 +241,98 @@ lgpd-export-standalone/
 | Gatilho pessoa | "gerente Bruno", "Dra. Ana Paula", "atribuído ao Ricardo" | Média |
 | Regex estrutural | CPF, CNPJ, RG, PIS/PASEP, placa, passaporte, título de eleitor, e-mail, telefone, CEP | Determinístico |
 
-> **Nomes compostos com preposição** são detectados corretamente: `João da Silva`, `Maria dos Santos`, `Ana de Oliveira e Souza`.
+> **Nomes compostos com preposição** são detectados corretamente em todos os detectores: `João da Silva`, `Maria dos Santos`, `Ana de Oliveira e Souza`.
+
+### Tokens gerados
+
+| Token | Dado protegido |
+|---|---|
+| `[PESSOA-1]`, `[PESSOA-2]`... | Nomes de pessoas (numerados consistentemente por issue) |
+| `[EMPRESA-1]`, `[EMPRESA-2]`... | Nomes de empresas |
+| `[CPF]` | CPF (formatos com e sem pontuação) |
+| `[CNPJ]` | CNPJ |
+| `[RG]` | RG (formatos estaduais XX.XXX.XXX-X) |
+| `[PIS]` | PIS / PASEP |
+| `[PLACA]` | Placas veiculares (formato antigo e Mercosul) |
+| `[PASSAPORTE]` | Passaporte brasileiro |
+| `[TITULO_ELEITOR]` | Título de eleitor |
+| `[EMAIL]` | Endereços de e-mail |
+| `[TELEFONE]` | Telefones (celular e fixo) |
+| `[CEP]` | CEP |
 
 ### Fluxo de 2 fases
 
-**Fase 1 — Mineração:** todos os textos da issue são varridos antes de qualquer substituição. O `EntityMap` garante que o mesmo nome sempre gera o mesmo token (`[PESSOA-1]`, `[PESSOA-2]`...) dentro de uma issue.
+**Fase 1 — Mineração:** todos os textos da issue são varridos antes de qualquer substituição. O `EntityMap` garante que o mesmo nome sempre gera o mesmo token dentro de uma issue.
 
-**Fase 2 — Substituição:** o `EntityMap` é aplicado em ordem decrescente de comprimento (evita substituição parcial) e em seguida as regex estruturais removem CPF, CNPJ, e-mail, telefone e CEP remanescentes.
+**Fase 2 — Substituição:** o `EntityMap` é aplicado em ordem decrescente de comprimento (evita substituição parcial) e em seguida as regex estruturais substituem CPF, CNPJ, RG, PIS, placas e demais dados.
+
+### Detecção de assinaturas expandida
+
+O extrator de assinaturas reconhece mais de 20 padrões de abertura de bloco, incluindo:
+- PT: `Att`, `Atenciosamente`, `Abs`, `Grato`, `Sem mais`, `Muito obrigado`, `Fico à disposição`
+- EN: `Best regards`, `Kind regards`, `Sincerely`, `Thanks`, `Respectfully`
+- Marcadores digitais: `--`, `___`, `Assinado digitalmente por`
 
 ---
 
 ## Integração com Zendesk
 
-Quando a issue Jira possui um ticket Zendesk vinculado (campo `ZENDESK_JIRA_FIELD`), o script tenta buscar os comentários usando três estratégias em cascata:
+Disponível apenas no **modo completo** (sem `--jira-only`). Quando a issue possui um ticket Zendesk vinculado, o script tenta buscar os comentários em cascata:
 
 | Ordem | Estratégia | Quando funciona |
 |---|---|---|
 | 1 | **Proxy via plugin Jira** | Plugin Zendesk instalado no Jira (sem credenciais extras) |
 | 2 | **API direta do Zendesk** | `ZENDESK_BASE_URL`, `ZENDESK_USER` e `ZENDESK_TOKEN` configurados |
-| 3 | **Automação de browser** | Nenhuma das anteriores funcionou — reutiliza a sessão SSO do Chrome ou Edge já aberto |
+| 3 | **Automação de browser** | Chrome ou Edge aberto com sessão SSO ativa |
 
-Na estratégia de browser, os cookies e dados de sessão são copiados para um diretório temporário para evitar conflito com o Chrome/Edge em uso. O diretório temporário é removido automaticamente ao final.
+Na estratégia de browser, os dados de sessão são copiados para um diretório temporário e removidos automaticamente ao final.
+
+---
+
+## Módulo de Diagnóstico — Laudo de Triagem
+
+O diagnóstico analisa o PDF gerado e produz um relatório com **9 seções padronizadas**:
+
+| # | Seção | Conteúdo |
+|---|---|---|
+| 1 | Sugestão de título | Título objetivo para o documento técnico |
+| 2 | Descrição funcional do problema | Em linguagem de negócio, sem termos de código |
+| 3 | Descrição funcional da solução | O que deve ser corrigido e resultado esperado |
+| 4 | Problemas reportados | Tipo, evidência e severidade (🔴/🟡/🔵) |
+| 5 | Análise de causa raiz | Fase 1 vs Fase 2, cobertura vs aplicação |
+| 6 | Trechos de fonte relacionados | `arquivo.js:linha` + código exato |
+| 7 | Sugestão de ajuste | Bloco `diff` com antes/depois |
+| 8 | Critérios de aceite | Checklist verificável |
+| 9 | Cenários de teste | Entrada e saída esperada |
+
+### Detecções automáticas do diagnóstico
+
+| Tipo | Descrição | Severidade |
+|---|---|---|
+| `leaked_email` / `leaked_cpf` / `leaked_cnpj` | PII estrutural que escapou da pipeline | 🔴 Crítico |
+| `leaked_rg` / `leaked_pis` / `leaked_phone` / `leaked_cep` | Dados pessoais remanescentes | 🟡 Atenção |
+| `broken_token` | Token com colchete não fechado | 🟡 Atenção |
+| `fallback_token` | `[PESSOA-?]` — nome não registrado na Fase 1 | 🟡 Atenção |
+| `high_token_density` | Mais de 15% das palavras são tokens (super-anonimização) | 🔵 Info |
+
+### Fallback de LLM (automático)
+
+O módulo tenta os provedores na ordem abaixo, sem necessidade de configuração prévia:
+
+1. `claude` CLI — sessão Claude Code / VS Code
+2. `codex` CLI — sessão OpenAI Codex
+3. GitHub Copilot — via `gh auth token` (plano Copilot ativo)
+4. `ANTHROPIC_API_KEY` — chave direta no `.env`
+
+---
+
+## Segurança no Módulo de Diagnóstico
+
+O diagnóstico foi projetado para **não vazar dados pessoais** ao LLM externo, mesmo quando a anonimização do PDF falhou:
+
+- O texto do PDF passa por sanitização com as mesmas regex da pipeline antes de entrar no prompt
+- Os exemplos dos achados (`findings.matches`) são substituídos por `[REDACTED]` — o LLM recebe apenas tipo, severidade e contagem
+- O código-fonte do workspace nunca contém dados de clientes
 
 ---
 
@@ -255,7 +342,7 @@ Cada exportação gera uma linha em `output/audit.log`:
 
 ```json
 {
-  "timestamp": "2026-03-11T09:22:12.000Z",
+  "timestamp": "2026-03-12T09:22:12.000Z",
   "issueKey": "DMANQUALI-12311",
   "filename": "DMANQUALI-12311_LGPD_anonimizado.pdf",
   "entidades": { "totalPessoas": 3, "totalEmpresas": 1 }
@@ -274,9 +361,10 @@ Nenhum dado pessoal é registrado — apenas metadados da operação.
 | `Autenticação falhou (401)` | Token inválido ou expirado | Gerar novo token no Jira |
 | `Issue não encontrada (404)` | Chave errada ou sem acesso ao projeto | Verificar a chave e permissões |
 | `Conexão falhou` | URL errada ou sem acesso à rede | Verificar `JIRA_BASE_URL` no `.env` |
-| `certificate has expired` | Certificado SSL corporativo | Já tratado (`rejectUnauthorized: false`) |
-| `Zendesk via API: 401` | Token Zendesk inválido | Gerar novo token em Zendesk Admin → Apps & Integrations → API |
-| Browser abre mas sem comentários | DOM do Jira não tem seletor reconhecido | Verificar a aba Zendesk manualmente e abrir issue no GitHub |
+| `certificate has expired` | Certificado SSL corporativo | Já tratado automaticamente (`rejectUnauthorized: false`) |
+| `Zendesk via API: 401` | Token Zendesk inválido | Novo token em Zendesk Admin → Apps & Integrations → API |
+| Browser sem comentários | DOM do Jira sem seletor reconhecido | Use `--jira-only` ou verifique a aba Zendesk manualmente |
+| `Nenhuma forma de acesso ao LLM` | Nenhum CLI instalado e sem API key | Instalar Claude Code ou configurar `ANTHROPIC_API_KEY` |
 
 ---
 
@@ -286,19 +374,7 @@ Nenhum dado pessoal é registrado — apenas metadados da operação.
 |---|---|
 | Art. 6 — Finalidade | ✅ Compartilhamento seguro sem exposição de dados pessoais |
 | Art. 7 — Base legal | ✅ Legítimo interesse do controlador |
-| Art. 12 — Anonimização | ✅ Tokens não permitem reidentificação |
-| Art. 33 — Transferência internacional | ✅ Exportação totalmente local, sem envio de dados a terceiros |
-| Art. 37 — Registro de operações | ✅ `output/audit.log` gerado automaticamente |
-| Art. 46 — Segurança técnica | ✅ Processamento em memória; diagnóstico sanitiza PII antes de qualquer chamada externa |
-
----
-
-## Segurança no Módulo de Diagnóstico
-
-O diagnóstico foi projetado para **não vazar dados pessoais** ao LLM externo:
-
-- O texto do PDF é sanitizado (mesmas regex da pipeline) antes de entrar no prompt
-- Os exemplos dos achados são substituídos por `[REDACTED]` — o LLM recebe apenas tipo, severidade e contagem
-- O código-fonte do workspace nunca contém dados de clientes
-
-Isso garante conformidade LGPD mesmo quando a anonimização do PDF falhou parcialmente.
+| Art. 12 — Anonimização | ✅ Tokens cobrem 12 tipos de PII, incluindo RG, PIS e placas |
+| Art. 33 — Transferência internacional | ✅ Exportação totalmente local; diagnóstico sanitiza antes de qualquer envio externo |
+| Art. 37 — Registro de operações | ✅ `output/audit.log` gerado automaticamente sem PII |
+| Art. 46 — Segurança técnica | ✅ Processamento em memória; PII nunca persiste em disco fora do PDF final |
