@@ -539,13 +539,19 @@ ${backendBlock}${frontendBlock}---
 
 ## Instrução de saída
 
-Produza um relatório de análise de negócio em Markdown com EXATAMENTE estas 9 seções, nesta ordem, usando subtítulos \`###\`:
+Produza um relatório de análise de negócio em Markdown com EXATAMENTE estas 12 seções, nesta ordem, usando subtítulos \`###\`:
 
 ### Título do documento de análise
 Uma linha. Título objetivo que descreve o problema de negócio. Ex: "Falha no cálculo de juros para contratos renovados após migração 2.4.1".
 
-### Resumo do problema (perspectiva do cliente)
-3 a 5 frases em linguagem de negócio, sem jargões técnicos de código. Descreva o que o cliente está experienciando, qual fluxo está afetado e qual o impacto.
+### Resumo da situação reportada
+2 a 3 frases curtas e diretas. O que o cliente reportou, em qual contexto, e qual o impacto percebido por ele. Escreva como se fosse o parágrafo de abertura de um e-mail para um gerente — sem termos técnicos, sem hipóteses, apenas o fato relatado.
+
+### Resumo da análise
+2 a 3 frases. O que a análise do ticket revelou: qual é a hipótese mais provável de causa raiz, em qual parte do sistema o problema provavelmente está localizado e o grau de confiança na hipótese (alta/média/baixa). Se houver mais de uma hipótese relevante, mencione a segunda brevemente.
+
+### Resumo da solução proposta
+2 a 3 frases. O que precisa ser feito para resolver o problema — sem detalhes de implementação. Descreva o resultado esperado após a correção do ponto de vista do cliente. Inclua se há necessidade de comunicação ao cliente, rollback ou ação de dados.
 
 ### Timeline de eventos
 Liste em ordem cronológica os eventos relevantes extraídos dos comentários e metadados:

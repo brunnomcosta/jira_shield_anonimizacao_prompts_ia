@@ -333,19 +333,21 @@ O diagnóstico produz até dois relatórios independentes com **9 seções padro
 | 8 | Critérios de aceite | Checklist verificável |
 | 9 | Cenários de teste | Entrada e saída esperada |
 
-### Relatório de Negócio (`--business`) — problema do cliente
+### Relatório de Negócio (padrão / `--business`) — problema do cliente
 
 | # | Seção | Conteúdo |
 |---|---|---|
 | 1 | Título do documento | Descreve o problema de negócio (ex: "Falha no cálculo de juros após migração 2.4.1") |
-| 2 | Resumo do problema | Perspectiva do cliente, sem jargão técnico |
-| 3 | Timeline de eventos | Cronologia extraída dos comentários e metadados |
-| 4 | Sintomas vs. causa raiz hipotética | O que o cliente vê + hipóteses ordenadas por probabilidade |
-| 5 | Trechos de código relacionados | `arquivo:linha` + código do workspace (se configurado) |
-| 6 | Passos para reproduzir e investigar | Como replicar + logs/queries para confirmar a hipótese |
-| 7 | Critérios de aceite | Condições verificáveis de resolução |
-| 8 | Cenários de teste regressivo | Casos de teste com entrada/saída esperada |
-| 9 | Contexto adicional | Issue links, versões afetadas, sprint, labels, attachments |
+| 2 | Resumo da situação reportada | O que o cliente reportou e qual o impacto percebido — sem hipóteses, como para um gerente |
+| 3 | Resumo da análise | Hipótese mais provável de causa raiz, localização no sistema e grau de confiança |
+| 4 | Resumo da solução proposta | O que precisa ser feito e o resultado esperado pelo cliente |
+| 5 | Timeline de eventos | Cronologia extraída dos comentários e metadados |
+| 6 | Sintomas vs. causa raiz hipotética | O que o cliente vê + hipóteses ordenadas por probabilidade |
+| 7 | Trechos de código relacionados | `arquivo:linha` + código do workspace (se configurado) |
+| 8 | Passos para reproduzir e investigar | Como replicar + logs/queries para confirmar a hipótese |
+| 9 | Critérios de aceite | Condições verificáveis de resolução |
+| 10 | Cenários de teste regressivo | Casos de teste com entrada/saída esperada |
+| 11 | Contexto adicional | Issue links, versões afetadas, sprint, labels, attachments |
 
 ### Detecções automáticas do diagnóstico
 
