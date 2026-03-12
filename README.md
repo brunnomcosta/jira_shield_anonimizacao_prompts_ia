@@ -115,15 +115,35 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 
 ## Uso
 
-### Exportar uma issue
+### Modo 1 — Apenas Jira (rápido, sem browser)
+
+Exporta somente a descrição e os comentários da issue no Jira. Não abre browser, não tenta conectar ao Zendesk. Ideal para triagem rápida ou ambientes sem acesso ao Zendesk.
+
+```bash
+node src/index.js --jira-only DMANQUALI-12311
+
+# ou via npm:
+npm run export:jira -- DMANQUALI-12311
+```
+
+### Modo 2 — Completo com Zendesk (padrão)
+
+Exporta Jira + tenta buscar os comentários do Zendesk vinculado em cascata: proxy Jira → API direta → browser com sessão SSO ativa (Chrome ou Edge).
 
 ```bash
 node src/index.js DMANQUALI-12311
+
+# ou via npm:
+npm run export -- DMANQUALI-12311
 ```
 
 ### Exportar várias issues de uma vez
 
 ```bash
+# Apenas Jira
+node src/index.js --jira-only DMANQUALI-12311 DMANQUALI-12312
+
+# Completo com Zendesk
 node src/index.js DMANQUALI-12311 DMANQUALI-12312 DMANQUALI-12313
 ```
 
@@ -131,10 +151,12 @@ node src/index.js DMANQUALI-12311 DMANQUALI-12312 DMANQUALI-12313
 
 ```bash
 node src/diagnostics.js DMANQUALI-12311
+
+# ou via npm:
+npm run diagnose -- DMANQUALI-12311
 ```
 
-> Requer `ANTHROPIC_API_KEY` configurada no `.env`.
-> Analisa o PDF gerado e o código-fonte (se `WORKSPACE_*` configurado) para avaliar riscos de reidentificação.
+> Analisa o PDF gerado e o código-fonte (se `WORKSPACE_*` configurado) para avaliar riscos de reidentificação. O módulo de diagnóstico **não requer** Zendesk nem browser.
 
 ### Saída esperada no terminal
 

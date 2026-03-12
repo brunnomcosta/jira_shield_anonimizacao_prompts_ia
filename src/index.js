@@ -41,7 +41,12 @@ function log(icon, msg, color = c.reset) {
 
 // ─── Exportar uma issue ───────────────────────────────────────────────────────
 
-async function exportIssue(issueKey) {
+/**
+ * Modos de exportação:
+ *   'jira-only' — apenas descrição + comentários Jira (rápido, sem browser)
+ *   'full'      — inclui Zendesk Comments via proxy, API direta e browser SSO (padrão)
+ */
+async function exportIssue(issueKey, mode = 'full') {
   const outputDir = process.env.OUTPUT_DIR || './output';
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -51,54 +56,59 @@ async function exportIssue(issueKey) {
   const issue = await fetchIssue(issueKey);
   log('✅', `Issue encontrada: ${issue.fields?.summary?.substring(0, 60)}`, c.green);
 
-  // 1b. Buscar Zendesk Comments
+  // 1b. Buscar Zendesk Comments (apenas no modo 'full')
   let zendeskData = null;
-  const zdField    = process.env.ZENDESK_JIRA_FIELD || 'customfield_11086';
-  const zdFieldVal = issue.fields?.[zdField];
-  const ticketId   = extractTicketId(zdFieldVal);
 
-  if (ticketId) {
-    log('🎫', `Buscando Zendesk Comments (ticket #${ticketId})...`, c.cyan);
-
-    // Estratégia 1: proxy via plugin Zendesk no próprio Jira (sem credenciais extras)
-    try {
-      zendeskData = await fetchZendeskViaJira(ticketId, issueKey);
-      if (zendeskData) {
-        log('✅', `${zendeskData.comments.length} Zendesk comment(s) via proxy Jira`, c.green);
-      }
-    } catch { /* silencioso — tenta próxima estratégia */ }
-
-    // Estratégia 2: API direta do Zendesk (se credenciais configuradas)
-    if (!zendeskData && isConfigured()) {
-      try {
-        zendeskData = await fetchTicketComments(ticketId);
-        log('✅', `${zendeskData.comments.length} Zendesk comment(s) via API Zendesk`, c.green);
-      } catch (err) {
-        log('⚠️', `Zendesk via API: ${err.message}`, c.yellow);
-      }
-    }
-
-    // Estratégia 3: automação de browser (reusa sessão SSO do Chrome/Edge)
-    if (!zendeskData) {
-      log('🌐', `Abrindo browser para extrair Zendesk Comments (ticket #${ticketId})...`, c.cyan);
-      try {
-        zendeskData = await fetchZendeskViaBrowser(issueKey, ticketId);
-        if (zendeskData && zendeskData.comments.length > 0) {
-          log('✅', `${zendeskData.comments.length} Zendesk comment(s) via browser`, c.green);
-        } else {
-          zendeskData = null;
-          log('⚠️', `Browser aberto mas nenhum comentário Zendesk encontrado no DOM`, c.yellow);
-        }
-      } catch (err) {
-        log('⚠️', `Browser extraction: ${err.message}`, c.yellow);
-      }
-    }
-
-    if (!zendeskData) {
-      log('⚠️', `Zendesk Comments indisponíveis — todas as estratégias falharam`, c.yellow);
-    }
+  if (mode === 'jira-only') {
+    log('ℹ️', `Modo jira-only — Zendesk ignorado`, c.gray);
   } else {
-    log('ℹ️', `Campo ${zdField} sem ticket Zendesk vinculado`, c.gray);
+    const zdField    = process.env.ZENDESK_JIRA_FIELD || 'customfield_11086';
+    const zdFieldVal = issue.fields?.[zdField];
+    const ticketId   = extractTicketId(zdFieldVal);
+
+    if (ticketId) {
+      log('🎫', `Buscando Zendesk Comments (ticket #${ticketId})...`, c.cyan);
+
+      // Estratégia 1: proxy via plugin Zendesk no próprio Jira (sem credenciais extras)
+      try {
+        zendeskData = await fetchZendeskViaJira(ticketId, issueKey);
+        if (zendeskData) {
+          log('✅', `${zendeskData.comments.length} Zendesk comment(s) via proxy Jira`, c.green);
+        }
+      } catch { /* silencioso — tenta próxima estratégia */ }
+
+      // Estratégia 2: API direta do Zendesk (se credenciais configuradas)
+      if (!zendeskData && isConfigured()) {
+        try {
+          zendeskData = await fetchTicketComments(ticketId);
+          log('✅', `${zendeskData.comments.length} Zendesk comment(s) via API Zendesk`, c.green);
+        } catch (err) {
+          log('⚠️', `Zendesk via API: ${err.message}`, c.yellow);
+        }
+      }
+
+      // Estratégia 3: automação de browser (reusa sessão SSO do Chrome/Edge)
+      if (!zendeskData) {
+        log('🌐', `Abrindo browser para extrair Zendesk Comments (ticket #${ticketId})...`, c.cyan);
+        try {
+          zendeskData = await fetchZendeskViaBrowser(issueKey, ticketId);
+          if (zendeskData && zendeskData.comments.length > 0) {
+            log('✅', `${zendeskData.comments.length} Zendesk comment(s) via browser`, c.green);
+          } else {
+            zendeskData = null;
+            log('⚠️', `Browser aberto mas nenhum comentário Zendesk encontrado no DOM`, c.yellow);
+          }
+        } catch (err) {
+          log('⚠️', `Browser extraction: ${err.message}`, c.yellow);
+        }
+      }
+
+      if (!zendeskData) {
+        log('⚠️', `Zendesk Comments indisponíveis — todas as estratégias falharam`, c.yellow);
+      }
+    } else {
+      log('ℹ️', `Campo ${zdField} sem ticket Zendesk vinculado`, c.gray);
+    }
   }
 
   // 2. Anonimizar
@@ -139,19 +149,38 @@ async function exportIssue(issueKey) {
 
 async function main() {
   console.log();
-  console.log(`${c.bold}${c.cyan}╔═══════════════════════════════════╗`);
-  console.log(`║   JIRA LGPD Export — Standalone   ║`);
-  console.log(`╚═══════════════════════════════════╝${c.reset}`);
+  console.log(`${c.bold}${c.cyan}╔══════════════════════════════════════════╗`);
+  console.log(`║   SHIELD — LGPD Export (Jira Server)     ║`);
+  console.log(`╚══════════════════════════════════════════╝${c.reset}`);
   console.log();
 
-  const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+  const rawArgs  = process.argv.slice(2);
+  const flags    = rawArgs.filter((a) => a.startsWith('--'));
+  const args     = rawArgs.filter((a) => !a.startsWith('--'));
+  const jiraOnly = flags.includes('--jira-only');
+  const mode     = jiraOnly ? 'jira-only' : 'full';
 
   if (args.length === 0) {
-    console.log(`${c.yellow}Uso:${c.reset}  node src/index.js <ISSUE_KEY> [ISSUE_KEY2 ...]`);
-    console.log(`${c.gray}Ex:   node src/index.js DMANQUALI-12311${c.reset}`);
+    console.log(`${c.yellow}Uso:${c.reset}  node src/index.js [--jira-only] <ISSUE_KEY> [ISSUE_KEY2 ...]`);
+    console.log();
+    console.log(`${c.bold}Modos disponíveis:${c.reset}`);
+    console.log(`  ${c.green}(padrão)${c.reset}       Exportação completa — Jira + Zendesk Comments (proxy → API → browser SSO)`);
+    console.log(`  ${c.green}--jira-only${c.reset}    Apenas Jira — ignora Zendesk, sem abertura de browser`);
+    console.log();
+    console.log(`${c.gray}Exemplos:${c.reset}`);
+    console.log(`  node src/index.js DMANQUALI-12311`);
+    console.log(`  node src/index.js --jira-only DMANQUALI-12311`);
+    console.log(`  node src/index.js DMANQUALI-12311 DMANQUALI-12312`);
     console.log();
     process.exit(1);
   }
+
+  if (jiraOnly) {
+    log('ℹ️', `Modo: ${c.bold}jira-only${c.reset} — Zendesk desabilitado`, c.gray);
+  } else {
+    log('ℹ️', `Modo: ${c.bold}completo${c.reset} — Jira + Zendesk (proxy → API → browser)`, c.gray);
+  }
+  console.log();
 
   // Testar conexão antes de tudo
   log('🔌', `Conectando em ${process.env.JIRA_BASE_URL}...`, c.cyan);
@@ -175,7 +204,7 @@ async function main() {
 
   for (const issueKey of args) {
     try {
-      const filepath = await exportIssue(issueKey);
+      const filepath = await exportIssue(issueKey, mode);
       results.ok.push({ issueKey, filepath });
     } catch (err) {
       log('❌', `${issueKey}: ${err.message}`, c.red);

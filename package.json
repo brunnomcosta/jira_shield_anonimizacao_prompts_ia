@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "export": "node src/index.js",
+    "export:jira": "node src/index.js --jira-only",
     "setup": "node src/setup.js",
     "diagnose": "node src/diagnostics.js"
   },
