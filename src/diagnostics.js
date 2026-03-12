@@ -1084,25 +1084,28 @@ async function main() {
   const args    = rawArgs.filter(a => !a.startsWith('--'));
   const arg     = args[0];
 
-  // Modo de operação: sem flags = ambos; --lgpd = só LGPD; --business = só negócio
-  const onlyLGPD     = flags.includes('--lgpd')     && !flags.includes('--business');
-  const onlyBusiness = flags.includes('--business') && !flags.includes('--lgpd');
-  const runLGPD      = !onlyBusiness;
-  const runBusiness  = !onlyLGPD;
+  // Modo de operação:
+  //   padrão (sem flags) = negócio apenas
+  //   --lgpd             = só LGPD
+  //   --business         = só negócio (explícito)
+  //   --lgpd --business  = ambos
+  const runLGPD     = flags.includes('--lgpd');
+  const runBusiness = flags.includes('--business') || !flags.includes('--lgpd');
 
   if (!arg) {
-    console.log(`${c.yellow}Uso:${c.reset}  node src/diagnostics.js [--lgpd|--business] <ISSUE_KEY>`);
+    console.log(`${c.yellow}Uso:${c.reset}  node src/diagnostics.js [--lgpd] [--business] <ISSUE_KEY>`);
     console.log();
     console.log(`${c.bold}Modos disponíveis:${c.reset}`);
-    console.log(`  ${c.green}(padrão)${c.reset}      Ambas as análises: LGPD QA + problema de negócio`);
-    console.log(`  ${c.green}--lgpd${c.reset}        Apenas análise de qualidade de anonimização LGPD`);
-    console.log(`  ${c.green}--business${c.reset}    Apenas análise de problema de negócio / bug do cliente`);
+    console.log(`  ${c.green}(padrão)${c.reset}           Análise de problema de negócio / bug do cliente`);
+    console.log(`  ${c.green}--lgpd${c.reset}             Análise de qualidade de anonimização LGPD`);
+    console.log(`  ${c.green}--business${c.reset}         Análise de problema de negócio (igual ao padrão)`);
+    console.log(`  ${c.green}--lgpd --business${c.reset}  Ambas as análises`);
     console.log();
     console.log(`${c.gray}Sem argumento, usa o PDF mais recente em ${OUTPUT_DIR}${c.reset}`);
     console.log();
   }
 
-  const modeLabel = onlyLGPD ? 'LGPD' : onlyBusiness ? 'Negócio' : 'LGPD + Negócio';
+  const modeLabel = (runLGPD && runBusiness) ? 'LGPD + Negócio' : runLGPD ? 'LGPD' : 'Negócio';
   console.log(`${c.gray}Modo: ${c.bold}${modeLabel}${c.reset}`);
   console.log();
 

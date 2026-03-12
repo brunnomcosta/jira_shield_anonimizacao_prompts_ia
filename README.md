@@ -40,23 +40,23 @@ node src/index.js DMANQUALI-12311
 ### Módulo 2 — Diagnóstico Inteligente (Auxiliador de Triagem)
 
 ```
-node src/diagnostics.js DMANQUALI-12311             # ambos os modos (padrão)
-node src/diagnostics.js DMANQUALI-12311 --lgpd      # só análise LGPD
-node src/diagnostics.js DMANQUALI-12311 --business  # só análise de negócio
+node src/diagnostics.js DMANQUALI-12311              # padrão: análise de negócio
+node src/diagnostics.js DMANQUALI-12311 --lgpd       # só análise LGPD
+node src/diagnostics.js DMANQUALI-12311 --lgpd --business  # ambas
 
-Modo LGPD (--lgpd):
-  1. Extrai texto do PDF anonimizado
-  2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
-  3. Sanitiza conteúdo (nenhuma PII real sai do ambiente)
-  4. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
-  5. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
-
-Modo Negócio (--business):
+Modo padrão / --business (análise de negócio):
   1. Lê o PDF anonimizado e os metadados estruturais do ticket (metadata.json)
   2. Sanitiza conteúdo antes de enviar ao LLM
   3. Reconstrói timeline de eventos a partir dos comentários
   4. Analisa sintomas, hipóteses de causa raiz no produto e código do workspace
   5. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
+
+Modo --lgpd (qualidade da anonimização):
+  1. Extrai texto do PDF anonimizado
+  2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
+  3. Sanitiza conteúdo (nenhuma PII real sai do ambiente)
+  4. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
+  5. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
 
   (fallback automático: Claude CLI → Codex CLI → GitHub Copilot → API key)
 ```
@@ -165,18 +165,18 @@ node src/index.js DMANQUALI-12311 DMANQUALI-12312 DMANQUALI-12313
 ### Diagnóstico — LGPD e/ou análise de negócio
 
 ```bash
-# Ambos os modos (padrão) — gera dois relatórios
+# Padrão — análise do problema de negócio reportado pelo cliente
 node src/diagnostics.js DMANQUALI-12311
 
 # Só análise de qualidade da anonimização (LGPD)
 node src/diagnostics.js DMANQUALI-12311 --lgpd
 
-# Só análise do problema de negócio reportado pelo cliente
-node src/diagnostics.js DMANQUALI-12311 --business
+# Ambas as análises
+node src/diagnostics.js DMANQUALI-12311 --lgpd --business
 
 # ou via npm:
 npm run diagnose -- DMANQUALI-12311
-npm run diagnose -- DMANQUALI-12311 --business
+npm run diagnose -- DMANQUALI-12311 --lgpd
 ```
 
 > Não requer Zendesk nem browser. A análise de negócio usa o `{ISSUE_KEY}_metadata.json` gerado automaticamente pelo Módulo 1 — exporte primeiro com `node src/index.js` para habilitar o enriquecimento com labels, versões, issue links e sprint.
@@ -189,9 +189,9 @@ npm run diagnose -- DMANQUALI-12311 --business
 |---|---|---|
 | `npm run export -- KEY` | `node src/index.js KEY` | Exportação completa (Jira + Zendesk) |
 | `npm run export:jira -- KEY` | `node src/index.js --jira-only KEY` | Exportação apenas Jira, sem browser |
-| `npm run diagnose -- KEY` | `node src/diagnostics.js KEY` | Ambos os diagnósticos: LGPD + negócio |
+| `npm run diagnose -- KEY` | `node src/diagnostics.js KEY` | Análise de negócio (padrão) |
 | `npm run diagnose -- KEY --lgpd` | `node src/diagnostics.js KEY --lgpd` | Só análise LGPD (anonimização) |
-| `npm run diagnose -- KEY --business` | `node src/diagnostics.js KEY --business` | Só análise de negócio (bug do cliente) |
+| `npm run diagnose -- KEY --lgpd --business` | `node src/diagnostics.js KEY --lgpd --business` | Ambas as análises |
 | `npm run setup` | `node src/setup.js` | Assistente interativo de configuração |
 
 ### Saída esperada no terminal (modo jira-only)
