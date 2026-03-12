@@ -50,6 +50,24 @@ const IGNORE_DIRS = new Set([
   'out', '.idea', '.vscode', 'bin', 'obj',
 ]);
 
+const PIPELINE_SOURCE_FILES = [
+  { key: 'anonymizer', filename: 'anonymizer.js', ref: 'src/anonymizer.js' },
+  { key: 'nerDetector', filename: 'nerDetector.js', ref: 'src/nerDetector.js' },
+  { key: 'entityMap', filename: 'entityMap.js', ref: 'src/entityMap.js' },
+  { key: 'signatureExtractor', filename: 'signatureExtractor.js', ref: 'src/signatureExtractor.js' },
+  { key: 'contextualExtractor', filename: 'contextualExtractor.js', ref: 'src/contextualExtractor.js' },
+];
+
+const LLM_PROVIDER_LABELS = {
+  claude: 'claude CLI',
+  codex: 'codex CLI',
+  copilot: 'GitHub Copilot',
+  anthropic: 'Anthropic API key',
+};
+
+const DEFAULT_LLM_PROVIDER_ORDER = ['claude', 'codex', 'copilot', 'anthropic'];
+const LLM_PROVIDER_ORDER = parseLLMProviderOrder(process.env.LLM_PROVIDER_ORDER);
+
 // ─── Cores para o terminal ───────────────────────────────────────────────────
 
 const c = {
@@ -327,17 +345,8 @@ function localDetect(text) {
  * Lê os arquivos-fonte relevantes para contexto no prompt do Claude.
  */
 function readSourceFiles() {
-  const files = [
-    'anonymizer.js',
-    'nerDetector.js',
-    'entityMap.js',
-    'signatureExtractor.js',
-    'contextualExtractor.js',
-  ];
-
   const result = {};
-  for (const filename of files) {
-    const key = filename.replace('.js', '');
+  for (const { key, filename } of PIPELINE_SOURCE_FILES) {
     const filePath = resolve(SRC_DIR, filename);
     try {
       result[key] = fs.readFileSync(filePath, 'utf-8');
@@ -969,74 +978,126 @@ Use tabelas Markdown quando aplicável.`;
 }
 
 /**
- * Chama o claude CLI (Claude Code / VS Code) passando o prompt via stdin.
- * Usa a sessão autenticada do Claude Code — sem créditos de API separados.
+ * Normaliza a ordem dos provedores LLM configurada no .env.
  */
-function callClaudeCLI(prompt) {
-  return new Promise((resolve, reject) => {
-    // Escreve o prompt num arquivo temporário para evitar limites de tamanho de argumento
-    const tmpFile = join(os.tmpdir(), `lgpd_prompt_${Date.now()}.txt`);
-    fs.writeFileSync(tmpFile, prompt, 'utf-8');
+function parseLLMProviderOrder(raw) {
+  const aliasMap = new Map([
+    ['claude', 'claude'],
+    ['claude_cli', 'claude'],
+    ['codex', 'codex'],
+    ['codex_cli', 'codex'],
+    ['copilot', 'copilot'],
+    ['github_copilot', 'copilot'],
+    ['github', 'copilot'],
+    ['anthropic', 'anthropic'],
+    ['api', 'anthropic'],
+    ['api_key', 'anthropic'],
+    ['anthropic_api', 'anthropic'],
+  ]);
 
-    const args = ['-p', `$(cat "${tmpFile.replace(/\\/g, '/')}")`];
-    const proc = spawn('claude', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true,  // necessário para expandir $() no argumento
+  const selected = (raw || '')
+    .split(',')
+    .map(item => item.trim().toLowerCase())
+    .filter(Boolean)
+    .map(item => aliasMap.get(item))
+    .filter(Boolean);
+
+  return [...new Set(selected)].length > 0
+    ? [...new Set(selected)]
+    : [...DEFAULT_LLM_PROVIDER_ORDER];
+}
+
+function describeLLMProviderOrder() {
+  return LLM_PROVIDER_ORDER
+    .map(key => LLM_PROVIDER_LABELS[key] || key)
+    .join(' -> ');
+}
+
+function summarizeProviderError(providerLabel, err) {
+  const raw = String(err?.message || err || 'falha sem detalhes');
+  const withoutPrefix = raw.replace(
+    new RegExp(`^${escapeRegex(providerLabel)}:?\\s*`, 'i'),
+    ''
+  );
+  return withoutPrefix.replace(/\s+/g, ' ').trim().slice(0, 220) || 'falha sem detalhes';
+}
+
+function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile }) {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const cleanupOutput = () => {
+      if (!outputFile) return '';
+      try {
+        return fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf-8').trim() : '';
+      } finally {
+        try { fs.unlinkSync(outputFile); } catch {}
+      }
+    };
+
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+
+    const proc = spawn(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+      windowsHide: true,
     });
 
-    let out = '', errOut = '';
-    proc.stdout.on('data', d => out += d.toString());
-    proc.stderr.on('data', d => errOut += d.toString());
+    proc.stdout.on('data', d => stdout += d.toString());
+    proc.stderr.on('data', d => stderr += d.toString());
 
     proc.on('error', e => {
-      try { fs.unlinkSync(tmpFile); } catch {}
-      reject(new Error(`claude CLI não encontrado: ${e.message}`));
+      cleanupOutput();
+      settle(reject, new Error(`${providerLabel} não encontrado: ${e.message}`));
     });
 
     proc.on('close', code => {
-      try { fs.unlinkSync(tmpFile); } catch {}
-      if (code === 0 && out.trim()) {
-        resolve(out.trim());
+      const fileOutput = cleanupOutput();
+      const response = fileOutput || stdout.trim();
+      const details = stderr.trim().slice(0, 300) || stdout.trim().slice(0, 300) || 'sem detalhes';
+
+      if (code === 0 && response) {
+        settle(resolve, response);
       } else {
-        reject(new Error(`claude CLI: exit ${code} — ${errOut.trim().slice(0, 300) || out.trim().slice(0, 300)}`));
+        settle(reject, new Error(`${providerLabel}: exit ${code} — ${details}`));
       }
     });
+
+    proc.stdin.end(prompt, 'utf-8');
   });
 }
 
 /**
- * Chama o Codex CLI (OpenAI Codex CLI integrado ao VS Code).
- * Usa: codex -q "prompt" — reusa a sessão autenticada no VS Code.
+ * Chama o claude CLI (Claude Code / VS Code) usando stdin.
+ * Reaproveita a sessão autenticada do Claude Code / VS Code.
+ */
+function callClaudeCLI(prompt) {
+  return runCLIWithPrompt({
+    command: 'claude',
+    args: ['-p', '--output-format', 'text'],
+    prompt,
+    providerLabel: LLM_PROVIDER_LABELS.claude,
+  });
+}
+
+/**
+ * Chama o Codex CLI (OpenAI Codex CLI integrado ao VS Code) em modo exec.
+ * Reaproveita o login do Codex CLI / ChatGPT sem depender de API key.
  */
 function callCodexCLI(prompt) {
-  return new Promise((resolve, reject) => {
-    const tmpFile = join(os.tmpdir(), `lgpd_codex_${Date.now()}.txt`);
-    fs.writeFileSync(tmpFile, prompt, 'utf-8');
-
-    // codex -q lê o prompt do argumento em modo não-interativo (quiet)
-    const args = ['-q', `$(cat "${tmpFile.replace(/\\/g, '/')}")`];
-    const proc = spawn('codex', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true,
-    });
-
-    let out = '', errOut = '';
-    proc.stdout.on('data', d => out += d.toString());
-    proc.stderr.on('data', d => errOut += d.toString());
-
-    proc.on('error', e => {
-      try { fs.unlinkSync(tmpFile); } catch {}
-      reject(new Error(`codex CLI não encontrado: ${e.message}`));
-    });
-
-    proc.on('close', code => {
-      try { fs.unlinkSync(tmpFile); } catch {}
-      if (code === 0 && out.trim()) {
-        resolve(out.trim());
-      } else {
-        reject(new Error(`codex CLI: exit ${code} — ${errOut.trim().slice(0, 300) || out.trim().slice(0, 300)}`));
-      }
-    });
+  const tmpFile = join(os.tmpdir(), `lgpd_codex_${Date.now()}.txt`);
+  return runCLIWithPrompt({
+    command: 'codex',
+    args: ['exec', '--skip-git-repo-check', '--color', 'never', '--output-last-message', tmpFile, '-'],
+    prompt,
+    providerLabel: LLM_PROVIDER_LABELS.codex,
+    outputFile: tmpFile,
   });
 }
 
@@ -1134,70 +1195,59 @@ async function callClaudeAPI(prompt) {
 }
 
 /**
- * Detecta se um erro indica que o CLI simplesmente não está instalado.
- */
-function isCLINotFound(msg) {
-  return msg.includes('não encontrado') || msg.includes('ENOENT') ||
-         msg.includes('not found')      || msg.includes('not recognized') ||
-         msg.includes('cannot find')    || msg.includes('No such file');
-}
-
-/**
  * Orquestra a chamada ao modelo de linguagem com fallback automático:
- *   1. claude CLI       — sessão Claude Code / VS Code
- *   2. codex CLI        — sessão OpenAI Codex / VS Code
- *   3. GitHub Copilot   — sessão Copilot via gh CLI / VS Code
- *   4. API key direta   — ANTHROPIC_API_KEY no .env
+ *   - Reaproveita sessões já autenticadas no Claude Code / VS Code e Codex CLI
+ *   - Faz fallback também em erros de crédito, quota, autenticação ou indisponibilidade
+ *   - A ordem pode ser sobrescrita por LLM_PROVIDER_ORDER no .env
  */
 async function callClaude(prompt) {
   const label = (tag) => process.stdout.write(` \x1b[90m(via ${tag})\x1b[0m`);
+  const providers = {
+    claude: {
+      label: LLM_PROVIDER_LABELS.claude,
+      run: () => callClaudeCLI(prompt),
+    },
+    codex: {
+      label: LLM_PROVIDER_LABELS.codex,
+      run: () => callCodexCLI(prompt),
+    },
+    copilot: {
+      label: LLM_PROVIDER_LABELS.copilot,
+      run: () => callCopilot(prompt),
+    },
+    anthropic: {
+      label: LLM_PROVIDER_LABELS.anthropic,
+      run: () => callClaudeAPI(prompt),
+    },
+  };
 
-  // ── 1. claude CLI ─────────────────────────────────────────────────────────
-  try {
-    const r = await callClaudeCLI(prompt);
-    label('claude CLI');
-    return r;
-  } catch (e) {
-    if (!isCLINotFound(e.message)) throw new Error(`claude CLI: ${e.message}`);
-  }
+  const attempts = [];
 
-  // ── 2. codex CLI ──────────────────────────────────────────────────────────
-  try {
-    const r = await callCodexCLI(prompt);
-    label('codex CLI');
-    return r;
-  } catch (e) {
-    if (!isCLINotFound(e.message)) throw new Error(`codex CLI: ${e.message}`);
-  }
+  for (const providerKey of LLM_PROVIDER_ORDER) {
+    const provider = providers[providerKey];
+    if (!provider) continue;
 
-  // ── 3. GitHub Copilot (gh CLI + Copilot API) ──────────────────────────────
-  try {
-    const r = await callCopilot(prompt);
-    label('GitHub Copilot');
-    return r;
-  } catch (e) {
-    // Só ignora se gh não estiver instalado ou Copilot não disponível
-    const isUnavailable = isCLINotFound(e.message) ||
-      e.message.includes('não disponível') ||
-      e.message.includes('401') ||
-      e.message.includes('403');
-    if (!isUnavailable) throw new Error(`GitHub Copilot: ${e.message}`);
-  }
-
-  // ── 4. Anthropic API key ──────────────────────────────────────────────────
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (apiKey && apiKey !== 'sk-ant-api03-...') {
-    const r = await callClaudeAPI(prompt);
-    label('Anthropic API key');
-    return r;
+    try {
+      const result = await provider.run();
+      label(provider.label);
+      return result;
+    } catch (err) {
+      const summary = summarizeProviderError(provider.label, err);
+      attempts.push(`  - ${provider.label}: ${summary}`);
+      console.log(`\n   ${c.gray}↳ ${provider.label} indisponível: ${summary}${c.reset}`);
+    }
   }
 
   throw new Error(
     'Nenhuma forma de acesso ao modelo de linguagem disponível.\n\n' +
-    '  1. claude CLI  → verifique: claude --version\n' +
-    '  2. codex CLI   → instale: npm install -g @openai/codex\n' +
+    `Ordem atual: ${describeLLMProviderOrder()}\n\n` +
+    (attempts.length > 0 ? `Tentativas:\n${attempts.join('\n')}\n\n` : '') +
+    'Sugestões:\n' +
+    '  1. Claude Code → verifique: claude auth status\n' +
+    '  2. Codex CLI   → verifique: codex login status\n' +
     '  3. Copilot     → verifique: gh auth status\n' +
-    '  4. API key     → configure ANTHROPIC_API_KEY no .env'
+    '  4. API key     → configure ANTHROPIC_API_KEY no .env\n' +
+    '  5. Prioridade  → ajuste LLM_PROVIDER_ORDER=codex,claude,copilot,anthropic'
   );
 }
 
@@ -1368,13 +1418,7 @@ function collectAllowedEvidencePaths(workspace, includePipeline = false) {
   });
 
   if (includePipeline) {
-    [
-      ['src/anonymizer.js', 'anonymizer'],
-      ['src/nerDetector.js', 'nerDetector'],
-      ['src/entityMap.js', 'entityMap'],
-      ['src/signatureExtractor.js', 'signatureExtractor'],
-      ['src/contextualExtractor.js', 'contextualExtractor'],
-    ].forEach(([ref, key]) => {
+    PIPELINE_SOURCE_FILES.forEach(({ ref, key }) => {
       const content = readSourceFiles()[key] || '';
       const totalLines = content.split('\n').length;
       allowed.set(ref, {
@@ -1533,21 +1577,120 @@ async function ensureEvidenceBasedReport({ mode, report, basePrompt, workspace, 
  * @param {object}        opts.sections     - { mainContent, zendeskContent }
  * @param {object|null}   opts.metadata     - metadata.json ou null
  * @param {object}        opts.workspace    - { configured, backend, frontend }
- * @param {object[]|null} opts.sourceFiles  - arquivos da pipeline (modo LGPD)
+ * @param {object|null}   opts.sourceFiles  - arquivos da pipeline (modo LGPD)
  * @param {string}        opts.pdfPath      - caminho do PDF
  */
 async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFiles, pdfPath }) {
-  const pdfName    = basename(pdfPath);
-  const mainChars  = sanitizeForLLM(sections.mainContent || '').length;
-  const zdChars    = sections.zendeskContent
-    ? sanitizeForLLM(sections.zendeskContent).length : 0;
+  const pdfName = basename(pdfPath);
+  const mainChars = sanitizeForLLM(sections.mainContent || '').length;
+  const zdChars = sections.zendeskContent
+    ? sanitizeForLLM(sections.zendeskContent).length
+    : 0;
+  const hasBusinessMode = modes.some((mode) => mode.startsWith('Neg'));
+  const hasLGPDMode = modes.includes('LGPD');
 
-  const bkFiles  = workspace?.backend?.length  || 0;
-  const ftFiles  = workspace?.frontend?.length || 0;
-  const srcFiles = sourceFiles?.length         || 0;
+  const backendFiles = workspace?.backend || [];
+  const frontendFiles = workspace?.frontend || [];
+  const pipelineFiles = sourceFiles
+    ? PIPELINE_SOURCE_FILES
+      .filter(({ key }) => Object.prototype.hasOwnProperty.call(sourceFiles, key))
+      .map(({ key, ref }) => ({
+        ref,
+        sentAs: typeof sourceFiles[key] === 'string' && sourceFiles[key].startsWith('// Arquivo ')
+          ? 'placeholder (arquivo nao encontrado localmente)'
+          : 'arquivo completo',
+      }))
+    : [];
 
-  const line = (label, value) =>
-    console.log(`  ${c.gray}${label.padEnd(32)}${c.reset}${value}`);
+  const bkFiles = backendFiles.length;
+  const ftFiles = frontendFiles.length;
+  const srcFiles = pipelineFiles.length;
+  const labelWidth = 32;
+  const detail = (value) =>
+    console.log(`  ${' '.repeat(labelWidth + 2)}${c.gray}-> ${c.reset}${value}`);
+  const line = (label, value) => {
+    let resolvedValue = value;
+    let details = [];
+    const asciiLabel = label.normalize('NFKD').replace(/[^\x00-\x7F]/g, '');
+
+    if (asciiLabel.startsWith('Arquivo PDF')) {
+      resolvedValue = `${pdfName}  (${describeTextSend(mainChars, mainLimits, 'texto sanitizado completo', 'trecho sanitizado')})`;
+    } else if (asciiLabel.startsWith('Coment')) {
+      resolvedValue = describeTextSend(zdChars, zendeskLimits, 'texto sanitizado completo', 'trecho sanitizado');
+    } else if (asciiLabel.includes('pipeline')) {
+      resolvedValue = `${srcFiles} arquivo(s) de src/ - enviados por completo`;
+      details = pipelineFiles.map((file) => `${file.ref}  (${file.sentAs})`);
+    } else if (asciiLabel === 'Arquivos Backend:') {
+      resolvedValue = `${bkFiles} arquivo(s) do workspace - somente trechos`;
+      details = backendFiles.map((file) =>
+        `Backend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho)`
+      );
+    } else if (asciiLabel === 'Arquivos Frontend:') {
+      resolvedValue = `${ftFiles} arquivo(s) do workspace - somente trechos`;
+      details = frontendFiles.map((file) =>
+        `Frontend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho)`
+      );
+    }
+
+    if (
+      asciiLabel.startsWith('Arquivo PDF') ||
+      asciiLabel.startsWith('Coment') ||
+      asciiLabel.includes('pipeline') ||
+      asciiLabel === 'Arquivos Backend:' ||
+      asciiLabel === 'Arquivos Frontend:'
+    ) {
+      console.log(`  ${c.gray}${label.padEnd(labelWidth)}${c.reset}${resolvedValue}`);
+      details.forEach(detail);
+      return;
+    }
+
+    if (label === 'Arquivo PDF (texto extraÃ­do):') {
+      resolvedValue = `${pdfName}  (${describeTextSend(mainChars, mainLimits, 'texto sanitizado completo', 'trecho sanitizado')})`;
+    } else if (label === 'ComentÃ¡rios Zendesk:') {
+      resolvedValue = describeTextSend(zdChars, zendeskLimits, 'texto sanitizado completo', 'trecho sanitizado');
+    } else if (label === 'CÃ³digo-fonte da pipeline:') {
+      resolvedValue = `${srcFiles} arquivo(s) de src/ - enviados por completo`;
+      details = pipelineFiles.map((file) => `${file.ref}  (${file.sentAs})`);
+    } else if (label === 'Arquivos Backend:') {
+      resolvedValue = `${bkFiles} arquivo(s) do workspace - somente trechos`;
+      details = backendFiles.map((file) =>
+        `Backend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho)`
+      );
+    } else if (label === 'Arquivos Frontend:') {
+      resolvedValue = `${ftFiles} arquivo(s) do workspace - somente trechos`;
+      details = frontendFiles.map((file) =>
+        `Frontend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho)`
+      );
+    }
+
+    console.log(`  ${c.gray}${label.padEnd(labelWidth)}${c.reset}${resolvedValue}`);
+    details.forEach(detail);
+  };
+  const describeTextSend = (charCount, limits, fullLabel, partialLabel) => {
+    if (limits.length === 0) return `${charCount.toLocaleString()} chars`;
+
+    const fullModes = limits.filter(({ limit }) => charCount <= limit);
+    const partialModes = limits.filter(({ limit }) => charCount > limit);
+
+    if (partialModes.length === 0) {
+      return `${charCount.toLocaleString()} chars - ${fullLabel}`;
+    }
+    if (fullModes.length === 0) {
+      return `${charCount.toLocaleString()} chars - ${partialLabel}`;
+    }
+    return `${charCount.toLocaleString()} chars - completo em ${fullModes.map(({ mode }) => mode).join(', ')}; trecho em ${partialModes.map(({ mode }) => mode).join(', ')}`;
+  };
+
+  const mainLimits = [];
+  const zendeskLimits = [];
+  if (hasLGPDMode) {
+    mainLimits.push({ mode: 'LGPD', limit: 5000 });
+    zendeskLimits.push({ mode: 'LGPD', limit: 1500 });
+  }
+  if (hasBusinessMode) {
+    mainLimits.push({ mode: 'Negocio', limit: 6000 });
+    zendeskLimits.push({ mode: 'Negocio', limit: 2000 });
+  }
 
   console.log(`${c.bold}${c.yellow}┌─────────────────────────────────────────────────────────────┐`);
   console.log(`│  ⚠️  Confirmação de envio ao modelo de linguagem (LLM)        │`);
@@ -1583,7 +1726,7 @@ async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFile
     console.log(`    ${c.cyan}• Análise LGPD${c.reset}       — avaliar qualidade da anonimização e detectar vazamentos`);
   console.log();
   console.log(`  ${c.gray}Dados pessoais (PII) são removidos antes do envio (substituídos por [REDACTED]).${c.reset}`);
-  console.log(`  ${c.gray}O destino é determinado pelo fallback: claude CLI → codex CLI → Copilot → API key.${c.reset}`);
+  console.log(`  ${c.gray}O destino é determinado pela ordem configurada: ${describeLLMProviderOrder()}.${c.reset}`);
   console.log(`  ${c.gray}Saídas sem causa principal ou sem evidência válida são rejeitadas automaticamente.${c.reset}`);
   console.log();
 
@@ -1752,7 +1895,7 @@ async function main() {
 
   // ── Análise LGPD (qualidade de anonimização) ─────────────────────────────
   if (runLGPD) {
-    process.stdout.write(`${c.yellow}🔒 Análise LGPD — enviando para Claude...${c.reset}`);
+    process.stdout.write(`${c.yellow}🔒 Análise LGPD — enviando para LLM...${c.reset}`);
     let lgpdReport;
     try {
       const prompt = buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace);
@@ -1772,7 +1915,7 @@ async function main() {
     }
 
     const header     = buildReportHeader(pdfPath, findings, numpages);
-    const fullReport = header + '## Análise Claude\n\n' + lgpdReport;
+    const fullReport = header + '## Análise LLM\n\n' + lgpdReport;
 
     console.log();
     console.log(`${c.bold}${'─'.repeat(60)}${c.reset}`);
@@ -1786,7 +1929,7 @@ async function main() {
 
   // ── Análise de Negócio (problema do cliente) ──────────────────────────────
   if (runBusiness) {
-    process.stdout.write(`${c.yellow}💼 Análise de negócio — enviando para Claude...${c.reset}`);
+    process.stdout.write(`${c.yellow}💼 Análise de negócio — enviando para LLM...${c.reset}`);
     let businessReport;
     try {
       const prompt = buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace);

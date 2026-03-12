@@ -48,19 +48,21 @@ Modo padrão / --business (análise de negócio):
   1. Lê o PDF anonimizado e os metadados estruturais do ticket (metadata.json)
   2. Alerta se JIRA_TOKEN / WORKSPACE_* estiverem ausentes e pede preenchimento para melhorar o resultado
   3. Sanitiza conteúdo antes de enviar ao LLM
-  4. Reconstrói timeline de eventos a partir dos comentários
-  5. Analisa sintomas, hipótese mais provável de causa raiz no produto e código do workspace
-  6. Rejeita respostas do LLM sem causa principal ou sem evidência válida
-  7. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
+  4. Exibe confirmação pré-envio com nomes dos arquivos e indica se cada artefato vai completo ou por trecho
+  5. Reconstrói timeline de eventos a partir dos comentários
+  6. Analisa sintomas, hipótese mais provável de causa raiz no produto e código do workspace
+  7. Rejeita respostas do LLM sem causa principal ou sem evidência válida
+  8. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
 
 Modo --lgpd (qualidade da anonimização):
   1. Extrai texto do PDF anonimizado
   2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
   3. Sanitiza conteúdo (nenhuma PII real sai do ambiente)
-  4. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
-  5. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
+  4. Exibe confirmação pré-envio com nomes dos arquivos e indica se cada artefato vai completo ou por trecho
+  5. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
+  6. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
 
-  (fallback automático: Claude CLI → Codex CLI → GitHub Copilot → API key)
+  (fallback automático configurável: Claude CLI → Codex CLI → GitHub Copilot → API key)
 ```
 
 ---
@@ -117,7 +119,8 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 
 | Variável | Descrição |
 |---|---|
-| `ANTHROPIC_API_KEY` | Chave da API Anthropic (fallback se Claude CLI não estiver instalado) |
+| `ANTHROPIC_API_KEY` | Chave da API Anthropic (fallback se as sessões CLI não estiverem disponíveis) |
+| `LLM_PROVIDER_ORDER` | Ordem de tentativa dos provedores LLM (ex: `codex,claude,copilot,anthropic`) |
 | `WORKSPACE_BACKEND_DIR` | Raiz do código-fonte back-end para análise cruzada de causa raiz |
 | `WORKSPACE_FRONTEND_DIR` | Raiz do código-fonte front-end para análise cruzada de causa raiz |
 | `WORKSPACE_EXTENSIONS` | Extensões de arquivo a incluir (padrão: `js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp`) |
@@ -183,7 +186,7 @@ npm run diagnose -- DMANQUALI-12311 --lgpd
 
 > Não requer Zendesk nem browser. A análise de negócio usa o `{ISSUE_KEY}_metadata.json` gerado automaticamente pelo Módulo 1 — exporte primeiro com `node src/index.js` para habilitar o enriquecimento com labels, versões, issue links e sprint.
 >
-> Funciona com `claude` CLI instalado (Claude Code), Codex CLI, GitHub Copilot (`gh` CLI) ou `ANTHROPIC_API_KEY` no `.env`.
+> Funciona com sessão ativa no `claude` CLI (Claude Code / VS Code), login ativo no Codex CLI, GitHub Copilot (`gh` CLI) ou `ANTHROPIC_API_KEY` no `.env`. Se um provedor falhar por crédito, quota, autenticação ou indisponibilidade, o fallback continua automaticamente para o próximo da ordem configurada.
 
 ### Referência de scripts npm
 
@@ -364,12 +367,21 @@ O diagnóstico produz até dois relatórios independentes com **9 seções padro
 
 ### Fallback de LLM (automático)
 
-O módulo tenta os provedores na ordem abaixo, sem necessidade de configuração prévia:
+O módulo tenta os provedores na ordem configurada em `LLM_PROVIDER_ORDER`.
+Se a variável não existir, a ordem padrão é:
 
 1. `claude` CLI — sessão Claude Code / VS Code
-2. `codex` CLI — sessão OpenAI Codex
+2. `codex` CLI — sessão OpenAI Codex / login ChatGPT
 3. GitHub Copilot — via `gh auth token` (plano Copilot ativo)
 4. `ANTHROPIC_API_KEY` — chave direta no `.env`
+
+O fallback não depende mais apenas de "CLI não instalado". Ele também continua automaticamente quando o provedor retorna erro de crédito baixo, quota, autenticação, assinatura/licença indisponível ou outro bloqueio operacional.
+
+Exemplo para priorizar a licença do Codex CLI:
+
+```env
+LLM_PROVIDER_ORDER=codex,claude,copilot,anthropic
+```
 
 ---
 
@@ -380,11 +392,28 @@ O diagnóstico foi projetado para **não vazar dados pessoais** ao LLM externo, 
 - O texto do PDF passa por sanitização com as mesmas regex da pipeline antes de entrar no prompt
 - Os exemplos dos achados (`findings.matches`) são substituídos por `[REDACTED]` — o LLM recebe apenas tipo, severidade e contagem
 - O código-fonte do workspace nunca contém dados de clientes
-- Antes de qualquer envio, o usuário recebe uma confirmação explícita mostrando PDF, metadados e quantidade de arquivos de workspace que serão enviados
+- Antes de qualquer envio, o usuário recebe uma confirmação explícita mostrando PDF, metadados e a lista nominal dos arquivos que entrarão no prompt
+- O resumo diferencia envio completo vs. trecho: arquivos da pipeline `src/*.js` seguem completos; arquivos de backend/frontend do workspace seguem apenas com as faixas de linha extraídas
 - Se `JIRA_TOKEN` ou `WORKSPACE_BACKEND_DIR` / `WORKSPACE_FRONTEND_DIR` estiverem ausentes ou inválidos, o CLI alerta e pede o preenchimento do `.env` antes de continuar
 - O prompt exige uma única causa principal (`Causa mais provável:` / `Causa raiz mais provável:`), proíbe inventar arquivos/linhas e limita as referências aos trechos realmente enviados
 - Se o LLM retornar uma resposta sem causa principal ou com referências fora do contexto permitido, a saída é corrigida uma vez; se continuar sem evidência válida, o relatório é bloqueado para evitar conteúdo especulativo
 - Referências `arquivo:linha` só são aceitas se o arquivo realmente fizer parte do contexto enviado; para workspaces, a linha também precisa estar dentro das faixas exibidas nos snippets
+
+Exemplo de confirmação antes do envio:
+
+```text
+Os seguintes artefatos serão enviados ao LLM:
+
+Arquivo PDF (texto extraído):   DMANQUALI-12311_LGPD_anonimizado.pdf  (336 chars - texto sanitizado completo)
+Comentários Zendesk:            2.294 chars - trecho sanitizado
+Código-fonte da pipeline:       5 arquivo(s) de src/ - enviados por completo
+                                -> src/anonymizer.js  (arquivo completo)
+                                -> src/nerDetector.js  (arquivo completo)
+Arquivos Backend:               12 arquivo(s) do workspace - somente trechos
+                                -> Backend/src/service/foo.ts  (linhas 48-83 - trecho)
+Arquivos Frontend:              12 arquivo(s) do workspace - somente trechos
+                                -> Frontend/src/pages/bar.tsx  (linhas 12-57 - trecho)
+```
 
 ---
 
@@ -416,7 +445,8 @@ Nenhum dado pessoal é registrado — apenas metadados da operação.
 | `certificate has expired` | Certificado SSL corporativo | Já tratado automaticamente (`rejectUnauthorized: false`) |
 | `Zendesk via API: 401` | Token Zendesk inválido | Novo token em Zendesk Admin → Apps & Integrations → API |
 | Browser sem comentários | DOM do Jira sem seletor reconhecido | Use `--jira-only` ou verifique a aba Zendesk manualmente |
-| `Nenhuma forma de acesso ao LLM` | Nenhum CLI instalado e sem API key | Instalar Claude Code ou configurar `ANTHROPIC_API_KEY` |
+| `claude CLI: exit 1 — Credit balance is too low` | Sessão Claude Code ativa, mas sem saldo/quota disponível para a chamada | O fallback agora tenta `codex`, `copilot` e `ANTHROPIC_API_KEY`; para priorizar Codex, configure `LLM_PROVIDER_ORDER=codex,claude,copilot,anthropic` |
+| `Nenhuma forma de acesso ao LLM` | Nenhum provedor CLI/API ficou utilizável na ordem configurada | Verificar `claude auth status`, `codex login status`, `gh auth status` e/ou configurar `ANTHROPIC_API_KEY` |
 
 ---
 
