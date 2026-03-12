@@ -39,6 +39,83 @@ function log(icon, msg, color = c.reset) {
   console.log(`${color}${icon}  ${msg}${c.reset}`);
 }
 
+// ─── Metadados estruturais (não-PII) do ticket ───────────────────────────────
+
+/**
+ * Extrai e salva metadados estruturais da issue em {issueKey}_metadata.json.
+ * Contém apenas campos sem dados pessoais — usado pelo diagnóstico de negócio.
+ */
+function saveMetadata(issueKey, issue, outputDir) {
+  const f = issue.fields || {};
+  const zdField = process.env.ZENDESK_JIRA_FIELD || 'customfield_11086';
+
+  // Sprint: customfield_10014 pode ser array de objetos ou strings com formato Greenhopper
+  let sprint = null;
+  const sprintRaw = f.customfield_10014;
+  if (Array.isArray(sprintRaw) && sprintRaw.length > 0) {
+    const last = sprintRaw[sprintRaw.length - 1];
+    if (last && typeof last === 'object' && last.name) {
+      sprint = last.name;
+    } else if (typeof last === 'string') {
+      const m = last.match(/name=([^,\]]+)/);
+      sprint = m ? m[1].trim() : last;
+    }
+  } else if (typeof sprintRaw === 'string') {
+    sprint = sprintRaw;
+  }
+
+  // Extrai o ID do ticket Zendesk (mesmo campo usado no fluxo de export)
+  let zendeskTicketId = null;
+  const zdFieldVal = f[zdField];
+  if (Array.isArray(zdFieldVal) && zdFieldVal.length > 0) {
+    zendeskTicketId = String(zdFieldVal[0]?.id ?? zdFieldVal[0] ?? '').trim() || null;
+  } else if (zdFieldVal) {
+    const m = String(zdFieldVal).match(/\d+/);
+    zendeskTicketId = m ? m[0] : null;
+  }
+
+  const metadata = {
+    issueKey,
+    summary:          f.summary || '',
+    status:           f.status?.name || '',
+    issueType:        f.issuetype?.name || '',
+    priority:         f.priority?.name || '',
+    project:          f.project?.name || '',
+    projectKey:       f.project?.key || '',
+    created:          f.created || null,
+    updated:          f.updated || null,
+    labels:           f.labels || [],
+    components:       (f.components || []).map(comp => comp.name),
+    fixVersions:      (f.fixVersions || []).map(v => v.name),
+    affectedVersions: (f.versions || []).map(v => v.name),
+    issueLinks:       (f.issuelinks || []).map(link => ({
+      type:      link.type?.name || '',
+      direction: link.inwardIssue ? 'inward' : 'outward',
+      key:       (link.inwardIssue || link.outwardIssue)?.key || '',
+      summary:   (link.inwardIssue || link.outwardIssue)?.fields?.summary || '',
+      status:    (link.inwardIssue || link.outwardIssue)?.fields?.status?.name || '',
+    })),
+    subtasks:         (f.subtasks || []).map(s => ({
+      key:     s.key,
+      summary: s.fields?.summary || '',
+      status:  s.fields?.status?.name || '',
+    })),
+    parent: f.parent ? {
+      key:     f.parent.key,
+      summary: f.parent.fields?.summary || '',
+    } : null,
+    sprint,
+    epicKey:          f.customfield_10008 || null,
+    attachmentNames:  (f.attachment || []).map(a => a.filename),
+    commentCount:     f.comment?.total ?? f.comment?.comments?.length ?? 0,
+    zendeskTicketId,
+  };
+
+  const metaPath = path.join(outputDir, `${issueKey}_metadata.json`);
+  fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2), 'utf-8');
+  return metaPath;
+}
+
 // ─── Exportar uma issue ───────────────────────────────────────────────────────
 
 /**
@@ -130,6 +207,9 @@ async function exportIssue(issueKey, mode = 'full') {
   const filename = `${issueKey}_LGPD_anonimizado.pdf`;
   const filepath = path.join(outputDir, filename);
   fs.writeFileSync(filepath, pdfBuffer);
+
+  // 4b. Salvar metadados estruturais para o diagnóstico de negócio
+  saveMetadata(issueKey, issue, outputDir);
 
   // 5. Log de auditoria local
   const auditPath = path.join(outputDir, 'audit.log');

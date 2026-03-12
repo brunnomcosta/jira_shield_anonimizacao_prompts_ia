@@ -5,7 +5,7 @@
 Ferramenta CLI Node.js com dois módulos complementares para conformidade LGPD no Jira Server:
 
 - **Módulo 1 — Exportação:** gera PDFs anonimizados de issues do Jira Server sem instalação de plugin, em dois modos (somente Jira ou completo com Zendesk)
-- **Módulo 2 — Diagnóstico:** avalia a qualidade da anonimização e produz um laudo técnico com análise de causa raiz via IA, sem vazar dados pessoais ao LLM
+- **Módulo 2 — Diagnóstico:** dois modos complementares: (a) avalia a qualidade da anonimização com laudo técnico LGPD e (b) analisa o problema de negócio reportado pelo cliente com causa raiz no produto — ambos sem vazar dados pessoais ao LLM
 
 Compatível com Jira Server 8.x. A exportação ocorre **inteiramente no ambiente local** — nenhum dado pessoal é enviado a serviços externos.
 
@@ -40,15 +40,25 @@ node src/index.js DMANQUALI-12311
 ### Módulo 2 — Diagnóstico Inteligente (Auxiliador de Triagem)
 
 ```
-node src/diagnostics.js DMANQUALI-12311
+node src/diagnostics.js DMANQUALI-12311             # ambos os modos (padrão)
+node src/diagnostics.js DMANQUALI-12311 --lgpd      # só análise LGPD
+node src/diagnostics.js DMANQUALI-12311 --business  # só análise de negócio
 
+Modo LGPD (--lgpd):
   1. Extrai texto do PDF anonimizado
   2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
-  3. Sanitiza conteúdo antes de enviar ao LLM (nenhuma PII real sai do ambiente)
-  4. Envia código-fonte e contexto sanitizado ao LLM
-     (fallback automático: Claude CLI → Codex CLI → GitHub Copilot → API key)
-  5. Gera laudo com 9 seções padronizadas
-  6. Salva em output/diagnostic_<ISSUE_KEY>_<timestamp>.md
+  3. Sanitiza conteúdo (nenhuma PII real sai do ambiente)
+  4. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
+  5. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
+
+Modo Negócio (--business):
+  1. Lê o PDF anonimizado e os metadados estruturais do ticket (metadata.json)
+  2. Sanitiza conteúdo antes de enviar ao LLM
+  3. Reconstrói timeline de eventos a partir dos comentários
+  4. Analisa sintomas, hipóteses de causa raiz no produto e código do workspace
+  5. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
+
+  (fallback automático: Claude CLI → Codex CLI → GitHub Copilot → API key)
 ```
 
 ---
@@ -152,16 +162,26 @@ npm run export -- DMANQUALI-12311
 node src/index.js DMANQUALI-12311 DMANQUALI-12312 DMANQUALI-12313
 ```
 
-### Diagnóstico de qualidade da anonimização
+### Diagnóstico — LGPD e/ou análise de negócio
 
 ```bash
+# Ambos os modos (padrão) — gera dois relatórios
 node src/diagnostics.js DMANQUALI-12311
+
+# Só análise de qualidade da anonimização (LGPD)
+node src/diagnostics.js DMANQUALI-12311 --lgpd
+
+# Só análise do problema de negócio reportado pelo cliente
+node src/diagnostics.js DMANQUALI-12311 --business
 
 # ou via npm:
 npm run diagnose -- DMANQUALI-12311
+npm run diagnose -- DMANQUALI-12311 --business
 ```
 
-> Não requer Zendesk nem browser. Funciona com `claude` CLI instalado (Claude Code), Codex CLI, GitHub Copilot (`gh` CLI) ou `ANTHROPIC_API_KEY` no `.env`.
+> Não requer Zendesk nem browser. A análise de negócio usa o `{ISSUE_KEY}_metadata.json` gerado automaticamente pelo Módulo 1 — exporte primeiro com `node src/index.js` para habilitar o enriquecimento com labels, versões, issue links e sprint.
+>
+> Funciona com `claude` CLI instalado (Claude Code), Codex CLI, GitHub Copilot (`gh` CLI) ou `ANTHROPIC_API_KEY` no `.env`.
 
 ### Referência de scripts npm
 
@@ -169,7 +189,9 @@ npm run diagnose -- DMANQUALI-12311
 |---|---|---|
 | `npm run export -- KEY` | `node src/index.js KEY` | Exportação completa (Jira + Zendesk) |
 | `npm run export:jira -- KEY` | `node src/index.js --jira-only KEY` | Exportação apenas Jira, sem browser |
-| `npm run diagnose -- KEY` | `node src/diagnostics.js KEY` | Diagnóstico de anonimização com IA |
+| `npm run diagnose -- KEY` | `node src/diagnostics.js KEY` | Ambos os diagnósticos: LGPD + negócio |
+| `npm run diagnose -- KEY --lgpd` | `node src/diagnostics.js KEY --lgpd` | Só análise LGPD (anonimização) |
+| `npm run diagnose -- KEY --business` | `node src/diagnostics.js KEY --business` | Só análise de negócio (bug do cliente) |
 | `npm run setup` | `node src/setup.js` | Assistente interativo de configuração |
 
 ### Saída esperada no terminal (modo jira-only)
@@ -209,7 +231,9 @@ lgpd-export-standalone/
 ├── README.md
 ├── output/                   # PDFs e laudos gerados aqui
 │   ├── DMANQUALI-12311_LGPD_anonimizado.pdf
-│   ├── diagnostic_DMANQUALI-12311_2026-03-12T10-00-00.md
+│   ├── DMANQUALI-12311_metadata.json          # metadados estruturais (gerado junto ao PDF)
+│   ├── diagnostic_lgpd_DMANQUALI-12311_2026-03-12T10-00-00.md
+│   ├── diagnostic_business_DMANQUALI-12311_2026-03-12T10-00-00.md
 │   └── audit.log             # Log de auditoria (Art. 37 LGPD)
 └── src/
     ├── index.js              # CLI principal — dois modos: jira-only e completo
@@ -239,7 +263,7 @@ lgpd-export-standalone/
 | Sufixo jurídico | "TechCorp Ltda", "DataBrasil S.A.", "Farmacêutica XYZ" | Alta |
 | Gatilho empresa | "cliente Acme", "reunião com a TechBrasil" | Média |
 | Gatilho pessoa | "gerente Bruno", "Dra. Ana Paula", "atribuído ao Ricardo" | Média |
-| Regex estrutural | CPF, CNPJ, RG, PIS/PASEP, placa, passaporte, título de eleitor, e-mail, telefone, CEP | Determinístico |
+| Regex estrutural | CPF, CNPJ, RG, PIS/PASEP, placa, passaporte, título de eleitor, e-mail, telefone, CEP, senha | Determinístico |
 
 > **Nomes compostos com preposição** são detectados corretamente em todos os detectores: `João da Silva`, `Maria dos Santos`, `Ana de Oliveira e Souza`.
 
@@ -259,6 +283,7 @@ lgpd-export-standalone/
 | `[EMAIL]` | Endereços de e-mail |
 | `[TELEFONE]` | Telefones (celular e fixo) |
 | `[CEP]` | CEP |
+| `[SENHA]` | Senhas explícitas em texto (`senha:`, `password=`, `pwd:`, `passwd:`) |
 
 ### Fluxo de 2 fases
 
@@ -289,9 +314,11 @@ Na estratégia de browser, os dados de sessão são copiados para um diretório 
 
 ---
 
-## Módulo de Diagnóstico — Laudo de Triagem
+## Módulo de Diagnóstico — Laudos de Triagem
 
-O diagnóstico analisa o PDF gerado e produz um relatório com **9 seções padronizadas**:
+O diagnóstico produz até dois relatórios independentes com **9 seções padronizadas** cada.
+
+### Relatório LGPD (`--lgpd`) — qualidade da anonimização
 
 | # | Seção | Conteúdo |
 |---|---|---|
@@ -305,11 +332,25 @@ O diagnóstico analisa o PDF gerado e produz um relatório com **9 seções padr
 | 8 | Critérios de aceite | Checklist verificável |
 | 9 | Cenários de teste | Entrada e saída esperada |
 
+### Relatório de Negócio (`--business`) — problema do cliente
+
+| # | Seção | Conteúdo |
+|---|---|---|
+| 1 | Título do documento | Descreve o problema de negócio (ex: "Falha no cálculo de juros após migração 2.4.1") |
+| 2 | Resumo do problema | Perspectiva do cliente, sem jargão técnico |
+| 3 | Timeline de eventos | Cronologia extraída dos comentários e metadados |
+| 4 | Sintomas vs. causa raiz hipotética | O que o cliente vê + hipóteses ordenadas por probabilidade |
+| 5 | Trechos de código relacionados | `arquivo:linha` + código do workspace (se configurado) |
+| 6 | Passos para reproduzir e investigar | Como replicar + logs/queries para confirmar a hipótese |
+| 7 | Critérios de aceite | Condições verificáveis de resolução |
+| 8 | Cenários de teste regressivo | Casos de teste com entrada/saída esperada |
+| 9 | Contexto adicional | Issue links, versões afetadas, sprint, labels, attachments |
+
 ### Detecções automáticas do diagnóstico
 
 | Tipo | Descrição | Severidade |
 |---|---|---|
-| `leaked_email` / `leaked_cpf` / `leaked_cnpj` | PII estrutural que escapou da pipeline | 🔴 Crítico |
+| `leaked_email` / `leaked_cpf` / `leaked_cnpj` / `leaked_password` | PII estrutural que escapou da pipeline | 🔴 Crítico |
 | `leaked_rg` / `leaked_pis` / `leaked_phone` / `leaked_cep` | Dados pessoais remanescentes | 🟡 Atenção |
 | `broken_token` | Token com colchete não fechado | 🟡 Atenção |
 | `fallback_token` | `[PESSOA-?]` — nome não registrado na Fase 1 | 🟡 Atenção |
@@ -374,7 +415,7 @@ Nenhum dado pessoal é registrado — apenas metadados da operação.
 |---|---|
 | Art. 6 — Finalidade | ✅ Compartilhamento seguro sem exposição de dados pessoais |
 | Art. 7 — Base legal | ✅ Legítimo interesse do controlador |
-| Art. 12 — Anonimização | ✅ Tokens cobrem 12 tipos de PII, incluindo RG, PIS e placas |
+| Art. 12 — Anonimização | ✅ Tokens cobrem 13 tipos de PII, incluindo RG, PIS, placas e senhas |
 | Art. 33 — Transferência internacional | ✅ Exportação totalmente local; diagnóstico sanitiza antes de qualquer envio externo |
 | Art. 37 — Registro de operações | ✅ `output/audit.log` gerado automaticamente sem PII |
 | Art. 46 — Segurança técnica | ✅ Processamento em memória; PII nunca persiste em disco fora do PDF final |

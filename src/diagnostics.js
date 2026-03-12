@@ -90,6 +90,11 @@ const SOURCE_MAP = {
     lines: '12',
     description: 'Padrão CEP — PATTERNS[4] na função anonymizePatterns()',
   },
+  leaked_password: {
+    file: 'src/nerDetector.js',
+    lines: '25',
+    description: 'Padrão SENHA — senha/password/passwd/pwd seguido de valor não anonimizado',
+  },
   leaked_name_pessoa: {
     file: 'src/entityMap.js',
     lines: 'registerPessoa() + applyToText()',
@@ -229,6 +234,11 @@ function localDetect(text) {
       type: 'leaked_cep',
       rx: /\b\d{5}[-–]\d{3}\b/g,
       severity: 'warning',
+    },
+    {
+      type: 'leaked_password',
+      rx: /\b(?:senha|password|passwd|pwd)\s*[:=]\s*\S+/gi,
+      severity: 'critical',
     },
   ];
 
@@ -439,6 +449,132 @@ function splitPdfSections(text) {
     mainContent: text.slice(0, zendeskIdx).trim(),
     zendeskContent: text.slice(zendeskIdx).trim(),
   };
+}
+
+/**
+ * Carrega os metadados estruturais salvos pelo Módulo 1 (index.js).
+ * Retorna null se o arquivo não existir (retrocompatibilidade).
+ */
+function loadMetadata(issueKey) {
+  if (!issueKey) return null;
+  const metaPath = join(OUTPUT_DIR, `${issueKey}_metadata.json`);
+  try {
+    return JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Constrói o prompt de análise de problema de negócio para o Claude.
+ * Diferente do buildClaudePrompt (foco em LGPD QA), este foca no problema
+ * reportado pelo cliente e na causa raiz no produto.
+ */
+function buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace) {
+  const pdfName = basename(pdfPath);
+
+  const cap = (str, limit) => str.length > limit
+    ? str.slice(0, limit) + `\n[... truncado — total: ${str.length} chars ...]`
+    : str;
+
+  const mainSample    = cap(sanitizeForLLM(sections.mainContent), 6000);
+  const zendeskSample = sections.zendeskContent
+    ? cap(sanitizeForLLM(sections.zendeskContent), 2000)
+    : null;
+
+  const backendBlock  = buildWorkspaceBlock(workspace?.backend,  'Backend');
+  const frontendBlock = buildWorkspaceBlock(workspace?.frontend, 'Frontend');
+  const hasWorkspace  = workspace?.configured;
+
+  const metaBlock = metadata
+    ? `## Metadados estruturais do ticket\n\`\`\`json\n${JSON.stringify(metadata, null, 2)}\n\`\`\`\n\n`
+    : '';
+
+  const zendeskBlock = zendeskSample
+    ? `## Comunicação via Zendesk (canal do cliente)\n\`\`\`\n${zendeskSample}\n\`\`\``
+    : '';
+
+  const workspaceInstruction = hasWorkspace
+    ? `- Rastreie o problema até o código-fonte nos arquivos de workspace fornecidos. Cite arquivo:linha exatos quando identificar o ponto de falha.`
+    : `- Nenhum workspace de aplicação configurado — a análise se baseará apenas no conteúdo do ticket.`;
+
+  return `Você é um engenheiro de produto sênior analisando um bug reportado por cliente.
+
+Seu objetivo é entender o problema de negócio, reconstruir a sequência de eventos que gerou o problema e identificar a provável causa raiz no produto.
+
+**IMPORTANTE:**
+- Foque no problema descrito pelo cliente — não em questões de anonimização ou LGPD.
+- A descrição da issue e os comentários Jira são a fonte primária de análise.
+- Dados pessoais foram substituídos por tokens como [PESSOA-1], [EMPRESA-1] — isso é intencional e não faz parte do problema.
+- Os metadados estruturais (labels, versões, links) fornecem contexto adicional sobre o escopo do bug.
+
+---
+
+## Ticket: ${pdfName}
+Páginas: ${numpages}
+
+${metaBlock}## Descrição da issue e comentários Jira
+\`\`\`
+${mainSample}
+\`\`\`
+
+${zendeskBlock}
+
+${backendBlock}${frontendBlock}---
+
+## Instrução de saída
+
+Produza um relatório de análise de negócio em Markdown com EXATAMENTE estas 9 seções, nesta ordem, usando subtítulos \`###\`:
+
+### Título do documento de análise
+Uma linha. Título objetivo que descreve o problema de negócio. Ex: "Falha no cálculo de juros para contratos renovados após migração 2.4.1".
+
+### Resumo do problema (perspectiva do cliente)
+3 a 5 frases em linguagem de negócio, sem jargões técnicos de código. Descreva o que o cliente está experienciando, qual fluxo está afetado e qual o impacto.
+
+### Timeline de eventos
+Liste em ordem cronológica os eventos relevantes extraídos dos comentários e metadados:
+- Data/hora (se disponível) — evento
+
+Inclua: quando o problema começou, quando foi reportado, escalações, tentativas de reprodução, status atual.
+
+### Sintomas vs. causa raiz hipotética
+**Sintomas reportados (o que o cliente vê):**
+- Liste os sintomas descritos
+
+**Hipótese de causa raiz (o que provavelmente está errado no sistema):**
+- Liste hipóteses ordenadas por probabilidade (mais provável primeiro)
+- Para cada hipótese, indique qual componente/módulo do sistema está envolvido
+
+### Trechos de código relacionados
+${workspaceInstruction}
+Para cada hipótese relevante, cite arquivo:linha e inclua o trecho em bloco de código. Se não houver workspace configurado, descreva onde no sistema o problema provavelmente está e quais padrões de código buscar.
+
+### Passos para reproduzir e investigar
+Liste os passos concretos para:
+1. Reproduzir o problema em ambiente de desenvolvimento/homologação
+2. Confirmar a hipótese de causa raiz (ex: logs a verificar, queries a executar, endpoints a testar)
+
+### Critérios de aceite para resolução
+Para cada hipótese de causa raiz, liste as condições verificáveis que indicam resolução:
+- [ ] Critério específico e mensurável
+- [ ] Critério de validação com o cliente
+
+### Cenários de teste regressivo
+Para cada correção provável, proponha 2-3 cenários de teste com:
+- **Cenário:** descrição do caso
+- **Entrada:** dados de teste (sem PII real)
+- **Resultado esperado:** comportamento correto
+
+Use tabelas Markdown quando aplicável.
+
+### Contexto adicional relevante
+Liste informações do ticket que podem ser úteis para a investigação:
+- Issues relacionadas (blockers, duplicatas) — com chaves e summaries
+- Versões afetadas e fix versions
+- Componentes e labels
+- Sprint/Epic de contexto
+- Attachments mencionados (nomes de arquivos)`;
 }
 
 /**
@@ -900,14 +1036,18 @@ ${tableRows}
 }
 
 /**
- * Salva o relatório em output/diagnostic_<ISSUE_KEY>_<timestamp>.md
+ * Salva o relatório em output/diagnostic_<mode>_<ISSUE_KEY>_<timestamp>.md
+ * @param {string} content   - Conteúdo Markdown do relatório
+ * @param {string} issueKey  - Chave da issue (ex: DMANQUALI-12311) ou null
+ * @param {string} mode      - 'lgpd' | 'business' | '' (sem prefixo)
  */
-function saveReport(content, issueKey) {
+function saveReport(content, issueKey, mode = '') {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  const ts       = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const prefix   = issueKey ? `${issueKey}_` : '';
-  const filename = `diagnostic_${prefix}${ts}.md`;
-  const outPath  = join(OUTPUT_DIR, filename);
+  const ts        = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const modePart  = mode ? `${mode}_` : '';
+  const keyPart   = issueKey ? `${issueKey}_` : '';
+  const filename  = `diagnostic_${modePart}${keyPart}${ts}.md`;
+  const outPath   = join(OUTPUT_DIR, filename);
   fs.writeFileSync(outPath, content, 'utf-8');
   return outPath;
 }
@@ -917,19 +1057,36 @@ function saveReport(content, issueKey) {
 async function main() {
   console.log();
   console.log(`${c.bold}${c.cyan}╔══════════════════════════════════════════╗`);
-  console.log(`║   LGPD Diagnostic Tool — Anonimização    ║`);
+  console.log(`║   SHIELD — Diagnóstico LGPD & Negócio    ║`);
   console.log(`╚══════════════════════════════════════════╝${c.reset}`);
   console.log();
 
-  const arg = process.argv[2];
+  const rawArgs = process.argv.slice(2);
+  const flags   = rawArgs.filter(a => a.startsWith('--'));
+  const args    = rawArgs.filter(a => !a.startsWith('--'));
+  const arg     = args[0];
+
+  // Modo de operação: sem flags = ambos; --lgpd = só LGPD; --business = só negócio
+  const onlyLGPD     = flags.includes('--lgpd')     && !flags.includes('--business');
+  const onlyBusiness = flags.includes('--business') && !flags.includes('--lgpd');
+  const runLGPD      = !onlyBusiness;
+  const runBusiness  = !onlyLGPD;
 
   if (!arg) {
-    console.log(`${c.yellow}Uso:${c.reset}  node src/diagnostics.js <ISSUE_KEY>`);
-    console.log(`${c.gray}Ex:   node src/diagnostics.js DMANQUALI-12311${c.reset}`);
+    console.log(`${c.yellow}Uso:${c.reset}  node src/diagnostics.js [--lgpd|--business] <ISSUE_KEY>`);
+    console.log();
+    console.log(`${c.bold}Modos disponíveis:${c.reset}`);
+    console.log(`  ${c.green}(padrão)${c.reset}      Ambas as análises: LGPD QA + problema de negócio`);
+    console.log(`  ${c.green}--lgpd${c.reset}        Apenas análise de qualidade de anonimização LGPD`);
+    console.log(`  ${c.green}--business${c.reset}    Apenas análise de problema de negócio / bug do cliente`);
     console.log();
     console.log(`${c.gray}Sem argumento, usa o PDF mais recente em ${OUTPUT_DIR}${c.reset}`);
     console.log();
   }
+
+  const modeLabel = onlyLGPD ? 'LGPD' : onlyBusiness ? 'Negócio' : 'LGPD + Negócio';
+  console.log(`${c.gray}Modo: ${c.bold}${modeLabel}${c.reset}`);
+  console.log();
 
   // 1. Resolver PDF
   let pdfPath, issueKey;
@@ -945,7 +1102,15 @@ async function main() {
   }
   console.log(`${c.cyan}📄 Analisando:${c.reset} ${basename(pdfPath)}`);
 
-  // 2. Extrair texto do PDF
+  // 2. Carregar metadados estruturais (gerados pelo Módulo 1, se existirem)
+  const metadata = loadMetadata(issueKey);
+  if (metadata) {
+    console.log(`   ${c.gray}→ Metadados carregados (labels: [${(metadata.labels || []).join(', ')}], links: ${(metadata.issueLinks || []).length})${c.reset}`);
+  } else {
+    console.log(`   ${c.gray}→ Metadados não encontrados — exporte com index.js para habilitar análise de negócio enriquecida${c.reset}`);
+  }
+
+  // 3. Extrair texto do PDF
   process.stdout.write(`${c.yellow}⏳ Extraindo texto do PDF...${c.reset}`);
   let text, numpages;
   try {
@@ -957,10 +1122,10 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Separar seções do PDF e varredura local
+  // 4. Separar seções do PDF e varredura local
   const sections = splitPdfSections(text);
   if (sections.zendeskContent) {
-    console.log(`   ${c.gray}→ Seção Zendesk detectada (usada apenas como contexto auxiliar)${c.reset}`);
+    console.log(`   ${c.gray}→ Seção Zendesk detectada${c.reset}`);
   }
 
   process.stdout.write(`${c.yellow}🔍 Varredura local de PII...${c.reset}`);
@@ -977,47 +1142,83 @@ async function main() {
   }
   console.log();
 
-  // 4. Carregar arquivos-fonte da pipeline + workspace da aplicação
-  process.stdout.write(`${c.yellow}📂 Carregando código-fonte...${c.reset}`);
-  const sourceFiles = readSourceFiles();
-  console.log(` ${c.green}OK${c.reset}`);
+  // 5. Carregar arquivos-fonte da pipeline + workspace da aplicação
+  let sourceFiles, workspace;
+  if (runLGPD) {
+    process.stdout.write(`${c.yellow}📂 Carregando código-fonte da pipeline...${c.reset}`);
+    sourceFiles = readSourceFiles();
+    console.log(` ${c.green}OK${c.reset}`);
+  }
 
   process.stdout.write(`${c.yellow}🗂️  Escaneando workspace...${c.reset}`);
-  const workspace = readWorkspaceFiles(text);
+  workspace = readWorkspaceFiles(text);
   if (!workspace.configured) {
     console.log(` ${c.gray}não configurado (WORKSPACE_BACKEND_DIR / WORKSPACE_FRONTEND_DIR)${c.reset}`);
   } else {
     console.log(` ${c.green}OK${c.reset}`);
   }
 
-  // 5. Chamar Claude (CLI ou API)
-  process.stdout.write(`${c.yellow}🤖 Enviando para Claude...${c.reset}`);
-  let claudeReport;
-  try {
-    const prompt = buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace);
-    claudeReport = await callClaude(prompt);
-    console.log(` ${c.green}OK${c.reset}`);
-  } catch (err) {
+  console.log();
+
+  // ── Análise LGPD (qualidade de anonimização) ─────────────────────────────
+  if (runLGPD) {
+    process.stdout.write(`${c.yellow}🔒 Análise LGPD — enviando para Claude...${c.reset}`);
+    let lgpdReport;
+    try {
+      const prompt = buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace);
+      lgpdReport = await callClaude(prompt);
+      console.log(` ${c.green}OK${c.reset}`);
+    } catch (err) {
+      console.log();
+      console.error(`${c.red}❌ ${err.message}${c.reset}\n`);
+      process.exit(1);
+    }
+
+    const header     = buildReportHeader(pdfPath, findings, numpages);
+    const fullReport = header + '## Análise Claude\n\n' + lgpdReport;
+
     console.log();
-    console.error(`${c.red}❌ ${err.message}${c.reset}\n`);
-    process.exit(1);
+    console.log(`${c.bold}${'─'.repeat(60)}${c.reset}`);
+    console.log(fullReport);
+
+    const savedPath = saveReport(fullReport, issueKey, 'lgpd');
+    console.log(`${c.bold}${'─'.repeat(60)}${c.reset}`);
+    console.log(`${c.green}✅ Relatório LGPD salvo em: ${c.bold}${savedPath}${c.reset}`);
+    console.log();
   }
 
-  // 6. Montar relatório completo
-  const header = buildReportHeader(pdfPath, findings, numpages);
-  const fullReport = header + '## Análise Claude\n\n' + claudeReport;
+  // ── Análise de Negócio (problema do cliente) ──────────────────────────────
+  if (runBusiness) {
+    process.stdout.write(`${c.yellow}💼 Análise de negócio — enviando para Claude...${c.reset}`);
+    let businessReport;
+    try {
+      const prompt = buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace);
+      businessReport = await callClaude(prompt);
+      console.log(` ${c.green}OK${c.reset}`);
+    } catch (err) {
+      console.log();
+      console.error(`${c.red}❌ ${err.message}${c.reset}\n`);
+      process.exit(1);
+    }
 
-  // 7. Exibir no terminal
-  console.log();
-  console.log(`${c.bold}${'─'.repeat(60)}${c.reset}`);
-  console.log();
-  console.log(fullReport);
+    const now = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const businessHeader = `# Análise de Problema de Negócio\n\n` +
+      `**Arquivo analisado:** \`${basename(pdfPath)}\`\n` +
+      `**Gerado em:** ${now}\n` +
+      (metadata ? `**Sprint:** ${metadata.sprint || '—'}  |  **Versões afetadas:** ${(metadata.affectedVersions || []).join(', ') || '—'}\n` : '') +
+      `\n---\n\n`;
 
-  // 8. Salvar em arquivo
-  const savedPath = saveReport(fullReport, issueKey);
-  console.log(`${c.bold}${'─'.repeat(60)}${c.reset}`);
-  console.log(`${c.green}✅ Relatório salvo em: ${c.bold}${savedPath}${c.reset}`);
-  console.log();
+    const fullReport = businessHeader + businessReport;
+
+    console.log();
+    console.log(`${c.bold}${'─'.repeat(60)}${c.reset}`);
+    console.log(fullReport);
+
+    const savedPath = saveReport(fullReport, issueKey, 'business');
+    console.log(`${c.bold}${'─'.repeat(60)}${c.reset}`);
+    console.log(`${c.green}✅ Relatório de negócio salvo em: ${c.bold}${savedPath}${c.reset}`);
+    console.log();
+  }
 }
 
 main().catch((err) => {

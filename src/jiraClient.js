@@ -60,7 +60,10 @@ export async function fetchIssue(issueKey) {
     `&fields=summary,status,priority,assignee,reporter,description,` +
     `comment,created,updated,issuetype,project,${zdField},` +
     // Dados do contato Zendesk (nome, email, CPF/fone do solicitante)
-    `customfield_29200,customfield_29201,customfield_29202`;
+    `customfield_29200,customfield_29201,customfield_29202,` +
+    // Metadados de negócio para análise de causa raiz
+    `labels,components,fixVersions,versions,issuelinks,subtasks,parent,attachment,` +
+    `customfield_10014,customfield_10008`;
 
   const res = await fetch(url, {
     method: 'GET',
