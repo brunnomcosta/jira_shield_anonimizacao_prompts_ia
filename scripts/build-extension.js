@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { minify } from 'terser';
 import {
   DIAGNOSTIC_PERSONA,
   DIAGNOSTIC_CORE_CONSTRAINTS,
@@ -204,3 +205,46 @@ console.log(`Manifest: ${manifest.name} v${manifest.version}`);
 console.log(`Dependencia copiada: ${targetFile}`);
 console.log(`Snapshot do .env gerado em: ${generatedProjectEnvFile}`);
 console.log('Para usar no Chrome: chrome://extensions -> Developer mode -> Load unpacked -> chrome-extension');
+
+// ── Geração do pacote dist/ minificado ───────────────────────────────────────
+
+const distDir = path.join(rootDir, 'dist', 'chrome-extension');
+
+// Extensões que devem ser minificadas
+const MINIFY_EXTS = new Set(['.js']);
+
+// Arquivos JS que já estão minificados — copiar sem reprocessar
+const SKIP_MINIFY = new Set(['vendor/jspdf.umd.min.js']);
+
+async function copyDirMinified(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath  = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirMinified(srcPath, destPath);
+    } else {
+      const rel = path.relative(extensionDir, srcPath).replace(/\\/g, '/');
+      const ext = path.extname(entry.name).toLowerCase();
+      if (MINIFY_EXTS.has(ext) && !SKIP_MINIFY.has(rel)) {
+        const code = fs.readFileSync(srcPath, 'utf-8');
+        const result = await minify(code, {
+          ecma: 2020,
+          compress: { drop_console: false },
+          mangle: true,
+        });
+        fs.writeFileSync(destPath, result.code, 'utf-8');
+      } else {
+        fs.copyFileSync(srcPath, destPath);
+      }
+    }
+  }
+}
+
+// Limpa e recria o dist
+fs.rmSync(distDir, { recursive: true, force: true });
+await copyDirMinified(extensionDir, distDir);
+
+console.log(`\nPacote minificado gerado em: ${distDir}`);
+console.log('Para instalar no Chrome: chrome://extensions -> Load unpacked -> dist/chrome-extension');
+console.log('Para empacotar como .zip: compacte o conteudo de dist/chrome-extension/');
