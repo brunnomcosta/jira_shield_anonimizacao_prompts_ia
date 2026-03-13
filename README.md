@@ -1,6 +1,7 @@
 # SHIELD — Anonimização de Issues e Triagem Diagnóstica LGPD
 
 > **S**mart **H**andler for **I**ssue **E**xport with **L**inked **D**ata
+> *Gerenciador Inteligente para Exportação de Issues com Dados Vinculados*
 
 Ferramenta CLI Node.js com dois módulos complementares para conformidade LGPD no Jira Server:
 
@@ -105,6 +106,7 @@ npm install
 node src/setup.js
 
 # 3. Preparar a extensão Chrome (opcional)
+#    Copia o jsPDF para chrome-extension/vendor e valida os arquivos da extensao
 npm run build:extension
 
 # Ou: copiar o template manualmente
@@ -114,19 +116,21 @@ cp .env.example .env
 
 ---
 
-## Extensao Google Chrome (MVP)
+## Extensao Google Chrome
 
 O repositório agora inclui uma extensao Chrome em [chrome-extension/](./chrome-extension) para executar o **Módulo 1 — Exportação** dentro do navegador.
 
 ### O que a extensao faz
 
-- Exporta issue(s) do Jira para PDF anonimizado
-- Baixa junto o `{ISSUE_KEY}_metadata.json`
+- Exporta uma ou varias issue keys do Jira para PDF anonimizado
+- Detecta automaticamente a issue da aba atual quando voce esta no Jira
+- Baixa junto o `{ISSUE_KEY}_metadata.json`, pronto para o `diagnostics.js`
 - Tenta obter comentários Zendesk por 3 caminhos:
   - proxy do plugin Jira
   - API direta do Zendesk
   - scraping simples da aba Zendesk do Jira
-- Armazena histórico de auditoria no `chrome.storage.local`
+- Mostra no popup o modo de autenticacao ativo, pasta de download e capacidades disponiveis
+- Armazena historico local das exportacoes no `chrome.storage.local`
 
 ### O que fica fora da extensao
 
@@ -138,7 +142,7 @@ O repositório agora inclui uma extensao Chrome em [chrome-extension/](./chrome-
 ### Como carregar no Chrome
 
 ```bash
-# 1. Garantir que a dependência browser foi copiada
+# 1. Copiar a dependência jsPDF e validar a extensao
 npm run build:extension
 
 # 2. No Chrome
@@ -151,11 +155,28 @@ npm run build:extension
 ### Como usar
 
 1. Abra **Options** da extensao e preencha `JIRA_BASE_URL`
-2. Opcionalmente informe `JIRA_TOKEN` ou `JIRA_USER` + `JIRA_PASSWORD`
-3. Opcionalmente configure `ZENDESK_*`
-4. Abra o popup da extensao, informe uma ou mais issue keys e clique em **Exportar**
+2. Escolha a autenticacao:
+   - `JIRA_TOKEN` como prioridade
+   - ou `JIRA_USER` + `JIRA_PASSWORD`
+   - ou deixe vazio para usar a sessao ja aberta no navegador
+3. Opcionalmente configure `ZENDESK_*` para habilitar a API direta como fallback adicional
+4. Defina a pasta relativa dentro de `Downloads/`
+5. Abra o popup da extensao:
+   - use a issue detectada da aba atual
+   - ou informe uma ou mais issue keys
+   - escolha entre `Completo` e `Jira only`
+6. Clique em **Exportar** e acompanhe o resultado no popup
+7. Consulte o bloco de **Historico recente** para revisar exportacoes anteriores
 
 > Se `JIRA_TOKEN` ficar vazio, a extensao tenta usar a sessão já aberta no navegador.
+
+### O que fica disponivel pelo popup
+
+- iniciar exportacao de uma fila de issues sem sair do navegador
+- gerar PDF anonimizado e metadata JSON em `Downloads/<pasta>`
+- operar em modo `Completo` ou `Jira only`
+- ver rapidamente se a extensao esta usando token, usuario/senha ou sessao do navegador
+- revisar historico local das ultimas exportacoes e limpar esse historico quando necessario
 
 ---
 

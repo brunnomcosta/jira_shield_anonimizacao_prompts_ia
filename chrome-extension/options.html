@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JIRA SHIELD LGPD Export — Options</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell options">
+      <header class="hero hero-wide">
+        <div>
+          <h1 class="brand">SHIELD</h1>
+          <p class="subtitle">Configuração da extensão Chrome para exportação LGPD do Jira.</p>
+        </div>
+        <span class="hero-badge">Options</span>
+      </header>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Resumo operacional</h2>
+            <p class="section-copy">A extensão cobre o módulo de exportação e gera os arquivos de entrada do diagnostics.js.</p>
+          </div>
+        </div>
+        <div id="strategy-summary" class="summary-grid"></div>
+        <div class="pill-row">
+          <span class="pill">PDF anonimizado</span>
+          <span class="pill">metadata JSON</span>
+          <span class="pill">proxy Jira</span>
+          <span class="pill">API Zendesk opcional</span>
+          <span class="pill">histórico local</span>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Jira</h2>
+            <p class="section-copy">Obrigatório. Sem JIRA_BASE_URL a extensão não consegue ler a issue.</p>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="jiraBaseUrl">JIRA_BASE_URL</label>
+            <input id="jiraBaseUrl" type="url" placeholder="https://jira.empresa.com">
+            <div class="hint">Sem barra final. Ex.: https://jiraproducao.totvs.com.br</div>
+          </div>
+
+          <div class="field">
+            <label for="zendeskJiraField">ZENDESK_JIRA_FIELD</label>
+            <input id="zendeskJiraField" type="text" placeholder="customfield_11086">
+            <div class="hint">Campo Jira que guarda o ticket Zendesk vinculado.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Autenticação Jira</h2>
+            <p class="section-copy">Prioridade: token pessoal, depois usuário/senha, depois sessão já aberta no navegador.</p>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="jiraToken">JIRA_TOKEN</label>
+            <input id="jiraToken" type="password" placeholder="Opcional">
+            <div class="hint">Recomendado para Jira 8.14+.</div>
+          </div>
+
+          <div class="field">
+            <label for="downloadFolder">Pasta de download</label>
+            <input id="downloadFolder" type="text" placeholder="shield">
+            <div class="hint">Subpasta relativa dentro de Downloads.</div>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="jiraUser">JIRA_USER</label>
+            <input id="jiraUser" type="text" placeholder="Opcional">
+          </div>
+
+          <div class="field">
+            <label for="jiraPassword">JIRA_PASSWORD</label>
+            <input id="jiraPassword" type="password" placeholder="Opcional">
+          </div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Zendesk</h2>
+            <p class="section-copy">Opcional. Se não preencher, a extensão tenta o proxy Jira e depois a aba Zendesk da issue.</p>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="zendeskBaseUrl">ZENDESK_BASE_URL</label>
+            <input id="zendeskBaseUrl" type="url" placeholder="https://empresa.zendesk.com">
+          </div>
+
+          <div class="field">
+            <label for="zendeskUser">ZENDESK_USER</label>
+            <input id="zendeskUser" type="email" placeholder="agente@empresa.com">
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="zendeskToken">ZENDESK_TOKEN</label>
+            <input id="zendeskToken" type="password" placeholder="Opcional">
+          </div>
+
+          <div class="field">
+            <label>Escopo</label>
+            <div class="note-box">
+              O diagnóstico com LLM, leitura de workspace local e análise ERP/mobile continuam no CLI Node.js.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row actions">
+          <button id="save" class="primary" type="button">Salvar</button>
+          <button id="reset" class="secondary" type="button">Restaurar padrão</button>
+        </div>
+        <div id="status" class="status"></div>
+      </section>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>

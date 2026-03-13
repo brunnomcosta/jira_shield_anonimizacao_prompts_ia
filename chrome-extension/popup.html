@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JIRA SHIELD LGPD Export</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell popup-shell">
+      <header class="hero">
+        <div>
+          <h1 class="brand">SHIELD</h1>
+          <p class="subtitle">Exportação LGPD do Jira com PDF, metadata e fallback Zendesk.</p>
+        </div>
+        <span class="hero-badge">Chrome</span>
+      </header>
+
+      <section class="panel stack">
+        <div id="settings-summary" class="summary-grid"></div>
+
+        <div class="field">
+          <div class="field-head">
+            <label for="issue-keys">Issue keys</label>
+            <button id="use-current-issue" class="ghost" type="button" hidden>Usar issue da aba</button>
+          </div>
+          <textarea id="issue-keys" placeholder="DMANQUALI-12311&#10;DMANQUALI-12312"></textarea>
+          <div id="keys-hint" class="hint">Aceita uma ou varias chaves, separadas por espaco, virgula ou quebra de linha.</div>
+        </div>
+
+        <div class="field">
+          <div class="legend">Modo de exportação</div>
+          <div class="mode-grid">
+            <label class="mode-card">
+              <input type="radio" name="mode" value="full" checked>
+              <span class="mode-title">Completo</span>
+              <span class="mode-copy">Tenta anexar comentários Zendesk por proxy Jira, API direta e aba da issue.</span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="mode" value="jira-only">
+              <span class="mode-title">Jira only</span>
+              <span class="mode-copy">Exporta só Jira + metadata. Útil para triagem rápida ou quando Zendesk não precisa entrar.</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="legend">O que sai da extensão</div>
+          <div id="capabilities" class="pill-row"></div>
+        </div>
+
+        <div class="row actions">
+          <button id="run-export" class="primary" type="button">Exportar</button>
+          <button id="open-options" class="secondary" type="button">Configurar</button>
+        </div>
+
+        <div id="status" class="status"></div>
+        <div id="result-summary" class="result-summary"></div>
+        <div id="results" class="results-cards"></div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Histórico recente</h2>
+            <p class="section-copy">Últimas exportações registradas no storage local da extensão.</p>
+          </div>
+          <button id="clear-history" class="ghost" type="button">Limpar</button>
+        </div>
+        <div id="history" class="history-list"></div>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
