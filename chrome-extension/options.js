@@ -8,8 +8,17 @@ const DEFAULTS = {
   zendeskToken: '',
   zendeskJiraField: 'customfield_11086',
   downloadFolder: 'shield',
-  aiProvider: 'claude',
+  aiProvider: 'gemini',
   aiAction: 'copy-and-open',
+  activePromptTemplateId: 'documentation',
+  promptTemplateOverrides: {},
+  promptTemplateAdditions: {},
+};
+
+const promptEditorState = {
+  activeTemplateId: 'documentation',
+  overrides: {},
+  additions: {},
 };
 
 function setStatus(message, variant) {
@@ -44,6 +53,31 @@ function normalizeFolder(value) {
   return String(value || 'shield').trim().replace(/^\/+|\/+$/g, '') || 'shield';
 }
 
+function normalizeMultiline(value) {
+  return String(value || '').replace(/\r\n/g, '\n').trim();
+}
+
+function cloneMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return { ...value };
+}
+
+function getTemplateRegistry() {
+  return (window.SHIELD && SHIELD.prompts && SHIELD.prompts.listTemplates()) || [];
+}
+
+function getCurrentTemplateId() {
+  const registry = getTemplateRegistry();
+  const fallback = registry[0] ? registry[0].id : 'documentation';
+  return promptEditorState.activeTemplateId || fallback;
+}
+
+function getTemplateDescriptor(templateId, payload) {
+  return SHIELD.prompts.buildTemplateDescriptor(templateId, payload);
+}
+
 function getAIProviderLabel(value) {
   const labels = {
     claude: 'Claude.ai',
@@ -58,7 +92,69 @@ function getAIActionLabel(value) {
   return value === 'copy-only' ? 'Somente copiar o prompt' : 'Copiar e abrir a IA';
 }
 
+function syncPromptEditorStateFromFields() {
+  const templateId = getCurrentTemplateId();
+  promptEditorState.overrides[templateId] = normalizeMultiline(
+    document.getElementById('promptTemplateOverride').value
+  );
+  promptEditorState.additions[templateId] = normalizeMultiline(
+    document.getElementById('promptTemplateAddition').value
+  );
+}
+
+function renderPromptTemplateSelect() {
+  const select = document.getElementById('promptTemplateId');
+  const templates = getTemplateRegistry();
+  const activeTemplateId = getCurrentTemplateId();
+
+  select.innerHTML = templates.map((template) => (
+    `<option value="${template.id}">${template.label}</option>`
+  )).join('');
+
+  select.value = activeTemplateId;
+}
+
+function renderPromptTemplateEditor() {
+  const templateId = getCurrentTemplateId();
+  const defaultNode = document.getElementById('promptTemplateDefault');
+  const sourceNode = document.getElementById('promptTemplateSource');
+  const overrideNode = document.getElementById('promptTemplateOverride');
+  const additionNode = document.getElementById('promptTemplateAddition');
+  const previewNode = document.getElementById('promptTemplatePreview');
+  const hintNode = document.getElementById('promptTemplateHint');
+  const payload = {
+    activePromptTemplateId: templateId,
+    promptTemplateOverrides: promptEditorState.overrides,
+    promptTemplateAdditions: promptEditorState.additions,
+  };
+  const descriptor = getTemplateDescriptor(templateId, payload);
+
+  sourceNode.value = descriptor.sourceFile;
+  defaultNode.value = descriptor.defaultTemplate;
+  overrideNode.value = promptEditorState.overrides[templateId] || '';
+  additionNode.value = promptEditorState.additions[templateId] || '';
+  previewNode.value = descriptor.finalTemplate;
+
+  if (descriptor.missingPlaceholders.length) {
+    hintNode.textContent = `O SHIELD reintroduziu automaticamente os placeholders obrigatorios removidos: ${descriptor.missingPlaceholders.map((item) => `{{${item}}}`).join(', ')}. Isso afeta apenas o prompt enviado a LLM.`;
+    return;
+  }
+
+  hintNode.textContent = 'Os placeholders da issue sao preservados neste preview e sao resolvidos apenas na hora de gerar o prompt. Isso afeta apenas o prompt enviado a LLM.';
+}
+
+function buildPromptSummary(payload) {
+  const templateId = payload.activePromptTemplateId || getCurrentTemplateId();
+  const descriptor = getTemplateDescriptor(templateId, payload);
+  return {
+    label: descriptor.label,
+    mode: descriptor.usingDefaultBase ? 'Base padrao do arquivo' : 'Base customizada nas opcoes',
+  };
+}
+
 function readForm() {
+  syncPromptEditorStateFromFields();
+
   return {
     jiraBaseUrl: normalizeUrl(document.getElementById('jiraBaseUrl').value),
     jiraToken: document.getElementById('jiraToken').value.trim(),
@@ -71,6 +167,9 @@ function readForm() {
     downloadFolder: normalizeFolder(document.getElementById('downloadFolder').value),
     aiProvider: (document.querySelector('input[name="aiProvider"]:checked') || {}).value || 'claude',
     aiAction: (document.querySelector('input[name="aiAction"]:checked') || {}).value || 'copy-and-open',
+    activePromptTemplateId: getCurrentTemplateId(),
+    promptTemplateOverrides: cloneMap(promptEditorState.overrides),
+    promptTemplateAdditions: cloneMap(promptEditorState.additions),
   };
 }
 
@@ -84,12 +183,21 @@ function fillForm(data) {
   document.getElementById('zendeskToken').value = data.zendeskToken || '';
   document.getElementById('zendeskJiraField').value = data.zendeskJiraField || 'customfield_11086';
   document.getElementById('downloadFolder').value = data.downloadFolder || 'shield';
+
   const aiProviderVal = data.aiProvider || 'claude';
   const aiRadio = document.querySelector(`input[name="aiProvider"][value="${aiProviderVal}"]`);
   if (aiRadio) aiRadio.checked = true;
+
   const aiActionVal = data.aiAction || 'copy-and-open';
   const aiActionRadio = document.querySelector(`input[name="aiAction"][value="${aiActionVal}"]`);
   if (aiActionRadio) aiActionRadio.checked = true;
+
+  promptEditorState.overrides = cloneMap(data.promptTemplateOverrides);
+  promptEditorState.additions = cloneMap(data.promptTemplateAdditions);
+  promptEditorState.activeTemplateId = data.activePromptTemplateId || 'documentation';
+
+  renderPromptTemplateSelect();
+  renderPromptTemplateEditor();
 }
 
 function isValidHttpUrl(value) {
@@ -104,6 +212,7 @@ function isValidHttpUrl(value) {
 
 function renderStrategySummary(payload) {
   const node = document.getElementById('strategy-summary');
+  const promptSummary = buildPromptSummary(payload);
 
   const authMode = payload.jiraToken
     ? 'Token Jira'
@@ -137,6 +246,12 @@ function renderStrategySummary(payload) {
       label: 'IA',
       value: getAIProviderLabel(payload.aiProvider),
       copy: getAIActionLabel(payload.aiAction),
+      tone: '',
+    },
+    {
+      label: 'Prompt',
+      value: promptSummary.label,
+      copy: promptSummary.mode,
       tone: '',
     },
   ];
@@ -189,25 +304,42 @@ async function saveOptions() {
   if (validation) {
     setStatus(validation, 'warn');
     renderStrategySummary(payload);
+    renderPromptTemplateEditor();
     return;
   }
 
   await storageSet(payload);
   renderStrategySummary(payload);
-  setStatus('Configuracao salva. A extensao ja pode exportar PDF + metadata com os parametros informados.', '');
+  renderPromptTemplateEditor();
+  setStatus('Configuracao salva. O template editavel afeta apenas o prompt enviado a LLM; a anonimização continua no pipeline interno.', '');
 }
 
 function bindLiveSummary() {
-  document.querySelectorAll('input').forEach((node) => {
+  document.querySelectorAll('input, select, textarea').forEach((node) => {
     node.addEventListener('input', () => {
+      if (node.id === 'promptTemplateOverride' || node.id === 'promptTemplateAddition') {
+        syncPromptEditorStateFromFields();
+        renderPromptTemplateEditor();
+      }
       renderStrategySummary(readForm());
     });
+  });
+
+  document.getElementById('promptTemplateId').addEventListener('change', (event) => {
+    syncPromptEditorStateFromFields();
+    promptEditorState.activeTemplateId = event.target.value || 'documentation';
+    renderPromptTemplateEditor();
+    renderStrategySummary(readForm());
   });
 }
 
 async function resetOptions() {
   const confirmed = window.confirm('Restaurar os valores padrao da extensao?');
   if (!confirmed) return;
+
+  promptEditorState.overrides = {};
+  promptEditorState.additions = {};
+  promptEditorState.activeTemplateId = DEFAULTS.activePromptTemplateId;
 
   await storageSet({ ...DEFAULTS });
   fillForm(DEFAULTS);

@@ -16,6 +16,8 @@ const requiredFiles = [
   'background.js',
   'popup.html',
   'popup.js',
+  'prompt-templates.js',
+  'prompt-template-diagnostic.js',
   'options.html',
   'options.js',
   'styles.css',

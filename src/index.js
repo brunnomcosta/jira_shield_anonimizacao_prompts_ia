@@ -23,6 +23,7 @@ import { anonymizeIssue }                                   from './anonymizer.j
 import { generatePDF }                                      from './pdfGenerator.js';
 import { isConfigured, extractTicketId, fetchTicketComments } from './zendeskClient.js';
 import { fetchZendeskViaBrowser }                            from './browserExtractor.js';
+import { maskSensitiveText, sanitizeStructuredData }         from './sensitiveTextSanitizer.js';
 
 // ─── Cores para o terminal (sem dependência extra) ───────────────────────────
 const c = {
@@ -111,8 +112,10 @@ function saveMetadata(issueKey, issue, outputDir) {
     zendeskTicketId,
   };
 
+  const safeMetadata = sanitizeStructuredData(metadata);
+
   const metaPath = path.join(outputDir, `${issueKey}_metadata.json`);
-  fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2), 'utf-8');
+  fs.writeFileSync(metaPath, JSON.stringify(safeMetadata, null, 2), 'utf-8');
   return metaPath;
 }
 
@@ -131,7 +134,7 @@ async function exportIssue(issueKey, mode = 'full') {
 
   // 1. Buscar issue via API REST
   const issue = await fetchIssue(issueKey);
-  log('✅', `Issue encontrada: ${issue.fields?.summary?.substring(0, 60)}`, c.green);
+  log('✅', `Issue encontrada: ${maskSensitiveText(issue.fields?.summary?.substring(0, 60) || '')}`, c.green);
 
   // 1b. Buscar Zendesk Comments (apenas no modo 'full')
   let zendeskData = null;

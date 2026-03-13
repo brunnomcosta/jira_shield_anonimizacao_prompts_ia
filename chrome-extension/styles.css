@@ -151,6 +151,16 @@ body {
   resize: vertical;
 }
 
+.template-editor {
+  min-height: 180px;
+  font-family: Consolas, "Courier New", monospace;
+  line-height: 1.5;
+}
+
+.template-preview {
+  background: #f8fbfd;
+}
+
 .field input:focus,
 .field textarea:focus,
 .field select:focus {

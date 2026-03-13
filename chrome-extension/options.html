@@ -176,6 +176,53 @@
       </section>
 
       <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Templates de prompt</h2>
+            <p class="section-copy">O template padrao fica em <code>chrome-extension/prompt-templates.js</code>. Aqui voce pode sobrescrever a base, adicionar regras complementares e revisar a versao consolidada do prompt enviado a LLM.</p>
+          </div>
+        </div>
+
+        <div class="note-box">Esta configuracao interfere apenas no prompt enviado a LLM. As regras internas de anonimização continuam fora deste fluxo e permanecem centralizadas no pipeline de sanitizacao.</div>
+
+        <div class="field">
+          <label for="promptTemplateId">Template ativo</label>
+          <select id="promptTemplateId"></select>
+          <div class="hint">Precedencia: override do usuario > template padrao do arquivo. Depois disso, as regras complementares do usuario sao anexadas ao final.</div>
+        </div>
+
+        <div class="field">
+          <label for="promptTemplateSource">Arquivo fonte do template</label>
+          <input id="promptTemplateSource" type="text" readonly>
+          <div class="hint">O plugin deve conseguir enxergar qual arquivo fisico define o template padrao desta opcao.</div>
+        </div>
+
+        <div class="field">
+          <label for="promptTemplateDefault">Template padrao do sistema</label>
+          <textarea id="promptTemplateDefault" class="template-editor template-preview" readonly></textarea>
+          <div class="hint">Estas sao as regras padrao mantidas no arquivo fisico da extensao. Elas nao alteram a anonimização e servem como base para o prompt enviado a LLM.</div>
+        </div>
+
+        <div class="field">
+          <label for="promptTemplateOverride">Override do template base</label>
+          <textarea id="promptTemplateOverride" class="template-editor" placeholder="Deixe vazio para usar o template padrao do arquivo."></textarea>
+          <div class="hint">Use apenas se voce quiser substituir totalmente a base padrao para este tipo de prompt.</div>
+        </div>
+
+        <div class="field">
+          <label for="promptTemplateAddition">Regras complementares do usuario</label>
+          <textarea id="promptTemplateAddition" class="template-editor" placeholder="Ex.: priorize o modulo Financeiro e use nomenclatura interna validada pelo time."></textarea>
+          <div class="hint">Estas instrucoes sao anexadas ao final da base consolidada.</div>
+        </div>
+
+        <div class="field">
+          <label for="promptTemplatePreview">Template final consolidado</label>
+          <textarea id="promptTemplatePreview" class="template-editor template-preview" readonly></textarea>
+          <div id="promptTemplateHint" class="hint">Os placeholders da issue sao preservados neste preview e sao resolvidos apenas na hora de gerar o prompt.</div>
+        </div>
+      </section>
+
+      <section class="panel stack">
         <div class="row actions">
           <button id="save" class="primary" type="button">Salvar</button>
           <button id="reset" class="secondary" type="button">Restaurar padrao</button>
@@ -184,6 +231,8 @@
       </section>
     </main>
 
+    <script src="prompt-templates.js"></script>
+    <script src="prompt-template-diagnostic.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

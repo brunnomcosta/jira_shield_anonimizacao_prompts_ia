@@ -1,7 +1,7 @@
 const AI_URLS = {
-  claude:  'https://claude.ai/new',
+  claude: 'https://claude.ai/new',
   chatgpt: 'https://chat.openai.com/',
-  gemini:  'https://gemini.google.com/app',
+  gemini: 'https://gemini.google.com/app',
   copilot: 'https://copilot.microsoft.com/',
 };
 
@@ -26,15 +26,28 @@ function getAIActionLabel(value) {
   return value === 'copy-only' ? 'Somente copiar prompt' : 'Copiar prompt e abrir IA';
 }
 
-function getAIActionButtonLabel() {
+function getPromptTemplateSummary(settings) {
+  const templateId = (settings && settings.activePromptTemplateId) || 'documentation';
+  const descriptor = SHIELD.prompts.buildTemplateDescriptor(templateId, settings || {});
+  return {
+    label: descriptor.label,
+    copy: descriptor.usingDefaultBase ? 'Base padrao do sistema' : 'Base customizada nas opcoes',
+  };
+}
+
+function getPromptLabel(templateId) {
+  return SHIELD.prompts.getTemplateDefinition(templateId).label;
+}
+
+function getAIActionButtonLabel(templateId = 'documentation') {
   const action = (state.settings && state.settings.aiAction) || 'copy-and-open';
-  return action === 'copy-only' ? 'Copiar Prompt da IA' : 'Gerar Documentacao com IA';
+  return action === 'copy-only' ? `Copiar ${getPromptLabel(templateId)}` : getPromptLabel(templateId);
 }
 
 function syncAIActionButtonLabels() {
-  const label = getAIActionButtonLabel();
   document.querySelectorAll('.analyze-ai-btn').forEach((node) => {
-    node.textContent = label;
+    const templateId = node.dataset.templateId || 'documentation';
+    node.textContent = getAIActionButtonLabel(templateId);
   });
 }
 
@@ -63,6 +76,7 @@ function setStatus(message, variant) {
 function setBusy(busy) {
   document.getElementById('run-export').disabled = busy;
   document.getElementById('run-ai-doc').disabled = busy;
+  document.getElementById('run-ai-diagnostic').disabled = busy;
   document.querySelectorAll('input[name="mode"]').forEach((node) => {
     node.disabled = busy;
   });
@@ -121,6 +135,8 @@ function renderSettingsSummary(summary) {
     return;
   }
 
+  const promptTemplate = getPromptTemplateSummary(summary);
+
   const cards = [
     {
       label: 'Jira',
@@ -144,6 +160,12 @@ function renderSettingsSummary(summary) {
       label: 'IA',
       value: summary.aiProviderLabel || getAIProviderLabel(summary.aiProvider),
       copy: summary.aiActionLabel || getAIActionLabel(summary.aiAction),
+      tone: '',
+    },
+    {
+      label: 'Prompt',
+      value: promptTemplate.label,
+      copy: promptTemplate.copy,
       tone: '',
     },
   ];
@@ -187,57 +209,28 @@ function describeZendeskStatus(item) {
   return 'Sem detalhes de Zendesk';
 }
 
-function buildAIPrompt(item) {
-  return `Você é um redator técnico especialista em documentação de software da TOTVS. Com base no ticket JIRA abaixo (já anonimizado conforme LGPD), gere um Documento Técnico (DT) no padrão oficial TOTVS TDN.
+function buildAIPrompt(templateId, item) {
+  const renderedPrompt = SHIELD.prompts.renderPrompt(templateId, {
+    issueKey: item.issueKey,
+    anonymizedText: item.anonymizedText || '(conteudo nao disponivel)',
+  }, state.settings || {});
 
-## Regras de nomenclatura do título (DT)
-
-**Implementações** (inovações e débitos técnicos):
-  Formato: DT + Descrição + Localização (se existir)
-  Exemplos: "DT Fatura Eletrônica" | "DT Fatura Eletrônica ARG"
-
-**Correções** (manutenções):
-  Formato: Ticket + ID da Issue + DT + Descrição + Localização (se existir)
-  Exemplos: "122828 MRH-631 DT Erro Integração SAP" | "MRH-631 DT Erro Integração SAP"
-
-Identifique o tipo correto (implementação ou correção) pelo conteúdo do ticket.
-
-## Estrutura do documento a ser gerado
-
-### [Título conforme regra acima]
-
-**Problema**
-Resuma em poucas linhas, de forma objetiva, técnica e funcional, a situação que motivou este ticket (bug, erro, comportamento inesperado ou necessidade de implementação). Seja curto e direto ao ponto.
-
-**Solução**
-Resuma em poucas linhas, de forma objetiva, técnica e funcional, o que foi implementado ou corrigido para resolver o problema. Seja curto, direto ao ponto e foque no que realmente foi feito.
-
-**Assuntos Relacionados**
-Liste documentações do TDN (tdn.totvs.com) relacionadas ao tema tratado neste ticket. Para cada item, devolva obrigatoriamente:
-- **Título:** nome da documentação ou assunto relacionado
-- **URL:** link completo de referência
-Informe apenas links que você tenha alta confiança que existem. Se não tiver uma URL confiável, não invente e não inclua o item.
-
----
-Use linguagem técnica, clara e objetiva. Responda em português.
-
---- TICKET JIRA ANONIMIZADO: ${escapeHtml(item.issueKey)} ---
-${item.anonymizedText || '(conteúdo não disponível)'}
---- FIM DO TICKET ---`;
+  return renderedPrompt.prompt;
 }
 
-async function analyzeWithAI(item) {
-  const prompt = buildAIPrompt(item);
+async function analyzeWithAI(item, templateId = 'documentation') {
+  const prompt = buildAIPrompt(templateId, item);
   await navigator.clipboard.writeText(prompt);
   const action = (state.settings && state.settings.aiAction) || 'copy-and-open';
+  const promptLabel = getPromptLabel(templateId);
   if (action === 'copy-only') {
-    setStatus('Prompt copiado para a area de transferencia. Abra sua IA favorita e cole com Ctrl+V.', '');
+    setStatus(`${promptLabel} copiado para a area de transferencia. Abra sua IA favorita e cole com Ctrl+V.`, '');
     return;
   }
   const provider = (state.settings && state.settings.aiProvider) || 'claude';
   const url = AI_URLS[provider] || AI_URLS.claude;
   chrome.tabs.create({ url });
-  setStatus('Prompt copiado! Cole-o na IA que foi aberta (Ctrl+V).', '');
+  setStatus(`${promptLabel} copiado. Cole-o na IA que foi aberta (Ctrl+V).`, '');
 }
 
 function renderResults(response) {
@@ -261,10 +254,12 @@ function renderResults(response) {
     card.className = `result-card${item.ok ? '' : ' error'}`;
 
     if (item.ok) {
-      const aiButtonLabel = getAIActionButtonLabel();
-      const aiButton = item.ticketId
-        ? `<div class="result-actions"><button class="ghost analyze-ai-btn" data-index="${index}" type="button">Gerar Documentação com IA</button></div>`
-        : '';
+      const aiButton = `
+        <div class="result-actions">
+          <button class="ghost analyze-ai-btn" data-index="${index}" data-template-id="documentation" type="button">${escapeHtml(getAIActionButtonLabel('documentation'))}</button>
+          <button class="ghost analyze-ai-btn" data-index="${index}" data-template-id="diagnostic" type="button">${escapeHtml(getAIActionButtonLabel('diagnostic'))}</button>
+        </div>
+      `;
       card.innerHTML = `
         <div class="row result-head">
           <strong>${escapeHtml(item.issueKey)}</strong>
@@ -403,7 +398,7 @@ async function runExport() {
   }
 }
 
-function renderAIDocResults(response) {
+function renderPromptResults(response, templateId) {
   const list = document.getElementById('results');
   const summary = document.getElementById('result-summary');
   list.innerHTML = '';
@@ -414,7 +409,7 @@ function renderAIDocResults(response) {
   if (!results.length) return;
 
   if (response.summary) {
-    summary.textContent = `Prontas para documentação: ${response.summary.success} | Falha: ${response.summary.failed}`;
+    summary.textContent = `${getPromptLabel(templateId)} prontos: ${response.summary.success} | Falha: ${response.summary.failed}`;
   }
 
   results.forEach((item, index) => {
@@ -422,7 +417,7 @@ function renderAIDocResults(response) {
     card.className = `result-card${item.ok ? '' : ' error'}`;
 
     if (item.ok) {
-      const aiButtonLabel = getAIActionButtonLabel();
+      const aiButtonLabel = getAIActionButtonLabel(templateId);
       card.innerHTML = `
         <div class="row result-head">
           <strong>${escapeHtml(item.issueKey)}</strong>
@@ -430,7 +425,7 @@ function renderAIDocResults(response) {
         </div>
         <div class="result-title">${escapeHtml(item.issueSummary || '(sem resumo)')}</div>
         <div class="result-actions">
-          <button class="ghost analyze-ai-btn" data-index="${index}" type="button">Gerar Documentação com IA</button>
+          <button class="ghost analyze-ai-btn" data-index="${index}" data-template-id="${escapeHtml(templateId)}" type="button">${escapeHtml(aiButtonLabel)}</button>
         </div>
       `;
     } else {
@@ -449,13 +444,14 @@ function renderAIDocResults(response) {
   syncAIActionButtonLabels();
 }
 
-async function runGenerateDoc() {
+async function runPromptFlow(templateId) {
   const keys = parseIssueKeys(document.getElementById('issue-keys').value);
   const mode = document.querySelector('input[name="mode"]:checked').value;
+  const promptLabel = getPromptLabel(templateId);
 
   if (!keys.length) {
     setStatus('Informe ao menos uma issue key.', 'warn');
-    renderAIDocResults({ results: [] });
+    renderPromptResults({ results: [] }, templateId);
     return;
   }
 
@@ -465,12 +461,12 @@ async function runGenerateDoc() {
   }
 
   setBusy(true);
-  setStatus(`Buscando e anonimizando ${keys.length} issue(s)...`, '');
-  renderAIDocResults({ results: [] });
+  setStatus(`Buscando e anonimizando ${keys.length} issue(s) para preparar ${promptLabel}...`, '');
+  renderPromptResults({ results: [] }, templateId);
 
   try {
     const response = await sendMessage({
-      type: 'generateAIDoc',
+      type: 'preparePromptPayload',
       issueKeys: keys,
       mode,
     });
@@ -483,18 +479,17 @@ async function runGenerateDoc() {
     const successful = (response.results || []).filter((item) => item.ok);
 
     if (successful.length === 1) {
-      await analyzeWithAI(successful[0]);
+      await analyzeWithAI(successful[0], templateId);
     } else if (successful.length > 1) {
       const action = (state.settings && state.settings.aiAction) || 'copy-and-open';
       const actionText = action === 'copy-only'
-        ? 'Clique em "Copiar Prompt da IA" em cada uma.'
-        : 'Clique em "Gerar Documentacao com IA" em cada uma.';
-      setStatus(`${successful.length} issues prontas. Clique em "Gerar Documentação com IA" em cada uma.`, '');
-      renderAIDocResults(response);
-      setStatus(`${successful.length} issues prontas. ${actionText}`, '');
+        ? `Clique em "${getAIActionButtonLabel(templateId)}" em cada uma.`
+        : `Clique em "${getPromptLabel(templateId)}" em cada uma.`;
+      renderPromptResults(response, templateId);
+      setStatus(`${successful.length} issues prontas para ${promptLabel}. ${actionText}`, '');
     } else {
       setStatus('Nenhuma issue processada com sucesso.', 'error');
-      renderAIDocResults(response);
+      renderPromptResults(response, templateId);
     }
   } catch (error) {
     setStatus(error.message, 'error');
@@ -521,7 +516,11 @@ document.getElementById('run-export').addEventListener('click', () => {
 });
 
 document.getElementById('run-ai-doc').addEventListener('click', () => {
-  runGenerateDoc().catch((error) => setStatus(error.message, 'error'));
+  runPromptFlow('documentation').catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('run-ai-diagnostic').addEventListener('click', () => {
+  runPromptFlow('diagnostic').catch((error) => setStatus(error.message, 'error'));
 });
 
 document.getElementById('open-options').addEventListener('click', () => chrome.runtime.openOptionsPage());
@@ -535,12 +534,13 @@ document.getElementById('clear-history').addEventListener('click', () => {
   clearHistory().catch((error) => setStatus(error.message, 'error'));
 });
 
-document.getElementById('results').addEventListener('click', (e) => {
-  const btn = e.target.closest('.analyze-ai-btn');
-  if (!btn) return;
-  const index = parseInt(btn.dataset.index, 10);
+document.getElementById('results').addEventListener('click', (event) => {
+  const button = event.target.closest('.analyze-ai-btn');
+  if (!button) return;
+  const index = parseInt(button.dataset.index, 10);
+  const templateId = button.dataset.templateId || 'documentation';
   const item = state.exportResults && state.exportResults[index];
-  if (item) analyzeWithAI(item).catch((err) => setStatus(err.message, 'error'));
+  if (item) analyzeWithAI(item, templateId).catch((error) => setStatus(error.message, 'error'));
 });
 
 loadDashboard().catch((error) => setStatus(error.message, 'error'));

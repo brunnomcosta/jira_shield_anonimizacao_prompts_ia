@@ -9,6 +9,7 @@
     "export:jira": "node src/index.js --jira-only",
     "setup": "node src/setup.js",
     "diagnose": "node src/diagnostics.js",
+    "test": "node --test",
     "build:extension": "node scripts/build-extension.js",
     "build:icons": "node scripts/generate-icons.js"
   },

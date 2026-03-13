@@ -29,6 +29,7 @@ import { htmlToText, extractText } from './pdfGenerator.js';
 export function anonymizeIssue(issue, zendeskData = null) {
   const map = new EntityMap();
   const fields = issue.fields || {};
+  const summaryText = typeof fields.summary === 'string' ? fields.summary.trim() : '';
 
   // ── FASE 1: Mineração de entidades ────────────────────────────────────────
 
@@ -66,7 +67,7 @@ export function anonymizeIssue(issue, zendeskData = null) {
       }).filter(Boolean)
     : [];
 
-  const allTexts = [descText, ...commentTexts, ...zdCommentTexts].filter(Boolean);
+  const allTexts = [summaryText, descText, ...commentTexts, ...zdCommentTexts].filter(Boolean);
 
   // Fonte 2: assinaturas (alta confiança)
   // Fonte 3: contexto por gatilhos (média confiança)
@@ -85,7 +86,8 @@ export function anonymizeIssue(issue, zendeskData = null) {
 
   function process(text) {
     if (!text) return text;
-    return anonymizePatterns(map.applyToText(text));
+    const preMasked = anonymizePatterns(text);
+    return anonymizePatterns(map.applyToText(preMasked));
   }
 
   // Anonimiza corpo dos comentários Jira preservando metadados necessários para o PDF
@@ -135,7 +137,7 @@ export function anonymizeIssue(issue, zendeskData = null) {
       description: process(descText),
     },
     fields: {
-      summary:    fields.summary,     // resumo técnico — não anonimizar
+      summary:    process(summaryText),
       status:     fields.status,
       priority:   fields.priority,
       issuetype:  fields.issuetype,

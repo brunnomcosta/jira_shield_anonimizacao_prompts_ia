@@ -27,6 +27,7 @@ import readline from 'readline';
 import { spawn } from 'child_process';
 import { createRequire } from 'module';
 import Anthropic from '@anthropic-ai/sdk';
+import { maskSensitiveText, sanitizeStructuredData } from './sensitiveTextSanitizer.js';
 
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
@@ -1398,8 +1399,9 @@ function buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace, o
   const frontendBlock = buildWorkspaceBlock(workspace?.frontend, 'Frontend');
   const hasWorkspace  = workspace?.configured;
 
-  const metaBlock = metadata
-    ? `## Metadados estruturais do ticket\n\`\`\`json\n${JSON.stringify(metadata, null, 2)}\n\`\`\`\n\n`
+  const safeMetadata = metadata ? sanitizeStructuredData(metadata) : null;
+  const metaBlock = safeMetadata
+    ? `## Metadados estruturais do ticket\n\`\`\`json\n${JSON.stringify(safeMetadata, null, 2)}\n\`\`\`\n\n`
     : '';
 
   const zendeskBlock = zendeskSample
@@ -1442,7 +1444,7 @@ ${backendBlock}${frontendBlock}---
 
 ## Instrução de saída
 
-Produza um relatório de análise de negócio em Markdown com EXATAMENTE estas 12 seções, nesta ordem, usando subtítulos \`###\`:
+Produza um relatório de análise de negócio em Markdown com EXATAMENTE estas 13 seções, nesta ordem, usando subtítulos \`###\`:
 
 ### Título do documento de análise
 Uma linha. Título objetivo que descreve o problema de negócio. Ex: "Falha no cálculo de juros para contratos renovados após migração 2.4.1".
@@ -1455,6 +1457,13 @@ Uma linha. Título objetivo que descreve o problema de negócio. Ex: "Falha no c
 
 ### Resumo da solução proposta
 2 a 3 frases. O que precisa ser feito para resolver o problema — sem detalhes de implementação. Descreva o resultado esperado após a correção do ponto de vista do cliente. Inclua se há necessidade de comunicação ao cliente, rollback ou ação de dados.
+
+### Riscos relacionados ao contexto do caso
+Liste os riscos de negocio mais relevantes associados ao contexto relatado pelo cliente, ao estado atual do caso e à solução proposta. Nao liste riscos genericos:
+- **Risco atual se nada for feito:** impacto operacional, financeiro, regulatorio ou de experiencia do cliente neste caso
+- **Risco de recorrencia no contexto observado:** como o problema pode voltar a ocorrer considerando o fluxo, rotina ou operacao afetada
+- **Risco de regressao ou implantacao:** cuidado necessario para corrigir este caso sem causar novo efeito colateral no mesmo contexto funcional
+- **Nivel de impacto/probabilidade:** alta, media ou baixa, com uma justificativa curta vinculada ao contexto do caso
 
 ### Timeline de eventos
 Liste em ordem cronológica os eventos relevantes extraídos dos comentários e metadados:
@@ -1522,7 +1531,7 @@ function buildWorkspaceBlock(files, label) {
  * Reutiliza os mesmos padrões de localDetect para não expor dados sensíveis.
  */
 function sanitizeForLLM(text) {
-  if (!text) return text;
+  return maskSensitiveText(text);
   const PII_PATTERNS = [
     /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g,
     /\b\d{3}\.?\d{3}\.?\d{3}[-–]?\d{2}\b/g,
@@ -1548,6 +1557,10 @@ function sanitizeForLLM(text) {
  * Mantém tipo, severidade e contagem — apenas oculta os exemplos.
  */
 function sanitizeFindings(findings) {
+  return findings.map(f => ({
+    ...f,
+    matches: f.matches.map(match => maskSensitiveText(match, { fallbackTag: '[REDACTED]' })),
+  }));
   return findings.map(f => ({
     ...f,
     matches: f.matches.map(() => '[REDACTED]'),

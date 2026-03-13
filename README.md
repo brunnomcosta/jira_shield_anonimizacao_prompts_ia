@@ -33,6 +33,103 @@ Melhorias recentes:
 - a extracao contextual de pessoas ficou mais conservadora para evitar falsos positivos em termos de triagem e vocabulario tecnico
 - a deteccao de RG passou a ignorar padroes dentro de URLs e query strings, reduzindo falso positivo em links
 
+## Evolucao em andamento
+
+### Visao geral atual do projeto
+
+- O CLI continua sendo o ponto canonico de exportacao anonimizada e diagnostico com LLM.
+- A extensao Chrome continua restrita ao fluxo no navegador, sem acesso direto ao workspace local do VSCode.
+- A evolucao atual esta priorizando seguranca do pre-processamento, rastreabilidade de etapas e padronizacao de templates.
+
+### Objetivo atual da evolucao
+
+- Garantir mascaramento consistente de segredos, tokens, credenciais e dados sensiveis textuais antes de exportacao reaproveitada, geracao de prompt e envio para LLM.
+- Evoluir o template de analise de negocio para incluir riscos relacionados ao contexto do caso.
+- Preparar infraestrutura retomavel para novos tipos de prompt no plugin Chrome, com templates visiveis e editaveis sem interferir na anonimização.
+
+### Status geral da execucao
+
+- Etapa 1 concluida em 2026-03-13: mascaramento central de dados sensiveis textuais no CLI e na extensao, com testes automatizados.
+- Etapa 2 concluida em 2026-03-13: a analise de negocio passou a exigir `Riscos relacionados ao contexto do caso` no template padrao, evitando riscos genericos e focando no impacto do caso reportado.
+- Etapa 3 concluida em 2026-03-13: a extensao Chrome passou a expor o template padrao do sistema, override do usuario, regras complementares e preview consolidado do prompt enviado a LLM.
+- Etapa 4 concluida em 2026-03-13: o plugin ganhou `Prompt Diagnostico` com outro arquivo fisico de template, separado do template de documentacao e com configuracao isolada por `templateId`.
+- Etapa em andamento: Etapa 5 - avaliar e projetar `Prompt Diagnostico + Contexto Fontes` sem inventar acesso ao workspace local.
+
+### Etapas concluidas
+
+- Criado ponto unico de mascaramento textual em `src/sensitiveTextSanitizer.js`.
+- `src/anonymizer.js` passou a minerar e anonimizar `summary`.
+- `src/index.js` passou a salvar `metadata.json` com mascaramento textual recursivo e nao exibir `summary` bruto no log de exportacao.
+- `src/diagnostics.js` passou a sanitizar metadados estruturais antes da montagem do prompt.
+- `chrome-extension/shield-core.js` passou a anonimizar `summary`, expor sanitizacao estruturada e proteger `metadata`/prompt/historico do plugin.
+- Cobertura automatizada adicionada em `tests/`.
+- O template de analise de negocio em `src/diagnostics.js` passou a exigir uma secao explicita de riscos relacionados ao contexto do caso, com instrucao para nao listar riscos genericos, e a cobertura foi adicionada em `tests/diagnosticsPromptContracts.test.js`.
+- A extensao Chrome passou a usar `chrome-extension/prompt-templates.js` como ponto unico para templates de prompt da LLM, com visualizacao do template padrao, override opcional, regras complementares e preview consolidado nas opcoes.
+- A extensao Chrome passou a carregar tambem `chrome-extension/prompt-template-diagnostic.js`, espelhando o contrato do diagnostico de negocio do CLI em um arquivo separado e configuravel de forma independente.
+
+### Proximas etapas
+
+- Evoluir o plugin Chrome com `Prompt Documentacao` e `Prompt Diagnostico`.
+- Revisar a viabilidade segura de `Prompt Diagnostico + Contexto Fontes`.
+
+### Decisoes tecnicas tomadas
+
+- O mascaramento de segredos passou a ocorrer antes e depois da aplicacao lexical do `EntityMap`, para evitar que falsos positivos de contexto quebrem palavras-chave como `password` e impeçam a redacao do valor.
+- O `metadata.json` permanece util para diagnostico, mas agora com mascaramento textual recursivo para nao reaproveitar valores sensiveis em claro.
+- A extensao Chrome recebeu a mesma protecao funcional dentro do runtime do browser; a duplicidade Node/browser ainda existe por restricao arquitetural atual e fica registrada como ponto de evolucao.
+- Os templates editaveis da extensao foram limitados ao texto do prompt enviado a LLM; nenhuma opcao do plugin altera as regras internas de anonimização.
+- `Prompt Documentacao` e `Prompt Diagnostico` agora possuem arquivos fisicos distintos de template e compartilham apenas a infraestrutura de registro/renderizacao.
+
+### Riscos conhecidos
+
+- Ainda existe duplicidade de regras de mascaramento entre o runtime Node e o runtime da extensao Chrome. O comportamento foi alinhado nesta etapa, mas o ponto unico cross-runtime ainda nao existe.
+- `Prompt Diagnostico + Contexto Fontes` pode exigir integracao com o workspace local ou um companion CLI; a extensao isolada nao possui esse acesso hoje.
+
+### Limitacoes atuais
+
+- Nao existe um pacote/shared module unico reutilizado ao mesmo tempo por Node e pela extensao sem build adicional.
+- O template de diagnostico do CLI ainda esta acoplado ao `src/diagnostics.js`.
+- O template diagnostico da extensao espelha o contrato do CLI, mas ainda nao e gerado automaticamente a partir de `src/diagnostics.js`.
+
+### Pendencias
+
+- Registrar a alternativa segura caso `Prompt Diagnostico + Contexto Fontes` nao seja implementavel apenas com a extensao.
+- Definir o desenho seguro de `Prompt Diagnostico + Contexto Fontes` sem prometer acesso direto ao workspace local.
+
+### Como validar
+
+```bash
+npm test
+node --check src/index.js
+node --check src/diagnostics.js
+npm run build:extension
+npm test
+```
+
+### Como retomar o trabalho
+
+- Ler primeiro esta secao `Evolucao em andamento`.
+- Continuar pela Etapa 5, avaliando se `Prompt Diagnostico + Contexto Fontes` exigira um companion CLI ou outro mecanismo explicito de integracao local.
+- Antes de implementar `Prompt Diagnostico + Contexto Fontes`, revisar as limitacoes arquiteturais registradas acima.
+
+### Arquivos mais relevantes para continuidade
+
+- `README.md`
+- `src/sensitiveTextSanitizer.js`
+- `src/anonymizer.js`
+- `src/diagnostics.js`
+- `src/index.js`
+- `tests/diagnosticsPromptContracts.test.js`
+- `chrome-extension/shield-core.js`
+- `chrome-extension/background.js`
+- `chrome-extension/prompt-templates.js`
+- `chrome-extension/prompt-template-diagnostic.js`
+- `chrome-extension/popup.js`
+- `chrome-extension/options.js`
+- `tests/sensitiveTextSanitizer.test.js`
+- `tests/anonymizer.test.js`
+- `tests/promptTemplates.test.js`
+
 ---
 
 ## Como funciona
@@ -141,7 +238,7 @@ O repositório agora inclui uma extensao Chrome em [chrome-extension/](./chrome-
   - scraping simples da aba Zendesk do Jira
 - Mostra no popup o modo de autenticacao ativo, pasta de download e capacidades disponiveis
 - Armazena historico local das exportacoes no `chrome.storage.local`
-- Permite gerar um prompt de Documentacao Tecnica TOTVS (DT) com IA a partir do ticket anonimizado
+- Permite gerar `Prompt Documentacao` e `Prompt Diagnostico` a partir do ticket anonimizado
 - Abre a IA escolhida no navegador e copia o prompt automaticamente para a area de transferencia
 
 ### O que fica fora da extensao
@@ -173,14 +270,18 @@ npm run build:extension
    - ou deixe vazio para usar a sessao ja aberta no navegador
 3. Opcionalmente configure `ZENDESK_*` para habilitar a API direta como fallback adicional
 4. Defina a pasta relativa dentro de `Downloads/`
-5. Em **Options**, escolha a IA preferida para documentacao (`Claude`, `ChatGPT`, `Gemini` ou `Copilot`)
-6. Abra o popup da extensao:
+5. Em **Options**, escolha a IA preferida para os prompts (`Claude`, `ChatGPT`, `Gemini` ou `Copilot`)
+6. Ainda em **Options**, revise os templates disponiveis:
+   - visualize o template padrao do sistema
+   - veja qual arquivo fisico define cada template
+   - opcionalmente sobrescreva a base ou adicione regras complementares por template
+7. Abra o popup da extensao:
    - use a issue detectada da aba atual
    - ou informe uma ou mais issue keys
    - escolha entre `Completo` e `Jira only`
-7. Clique em **Exportar** e acompanhe o resultado no popup
-8. Se a issue tiver ticket Zendesk vinculado, use **Gerar Doc. com IA** para abrir a IA escolhida com o prompt ja copiado
-9. Consulte o bloco de **Historico recente** para revisar exportacoes anteriores
+8. Clique em **Exportar** e acompanhe o resultado no popup
+9. Use **Prompt Documentacao** ou **Prompt Diagnostico** para preparar o prompt desejado e abrir a IA escolhida com o conteudo ja copiado
+10. Consulte o bloco de **Historico recente** para revisar exportacoes anteriores
 
 > Se `JIRA_TOKEN` ficar vazio, a extensao tenta usar a sessão já aberta no navegador.
 
@@ -190,23 +291,34 @@ npm run build:extension
 - gerar PDF anonimizado e metadata JSON em `Downloads/<pasta>`
 - operar em modo `Completo` ou `Jira only`
 - ver rapidamente se a extensao esta usando token, usuario/senha ou sessao do navegador
-- preparar documentacao tecnica TOTVS com IA sem reenviar dados brutos do ticket
+- preparar prompts de documentacao e diagnostico sem reenviar dados brutos do ticket
 - revisar historico local das ultimas exportacoes e limpar esse historico quando necessario
 
-### Geracao de documentacao com IA
+### Geracao de prompts com IA
 
-Quando a exportacao encontra um ticket Zendesk vinculado, o popup passa a disponibilizar **Gerar Doc. com IA** para aquela issue. O fluxo faz o seguinte:
+O popup disponibiliza **Prompt Documentacao** e **Prompt Diagnostico** para a issue processada, com ou sem ticket Zendesk vinculado. O fluxo faz o seguinte:
 
 - busca novamente a issue e os comentarios relacionados no modo selecionado
 - monta um texto anonimizado do ticket para servir de base ao documento
-- copia para a area de transferencia um prompt no padrao TOTVS TDN
+- copia para a area de transferencia o prompt correspondente ao template selecionado
 - abre automaticamente a IA escolhida nas options
 
-O prompt instrui a IA a:
+Os templates podem ser revisados nas options e possuem arquivos fisicos separados:
+
+- `chrome-extension/prompt-templates.js` para `Prompt Documentacao`
+- `chrome-extension/prompt-template-diagnostic.js` para `Prompt Diagnostico`
+
+O `Prompt Documentacao` instrui a IA a:
 
 - gerar `Problema` e `Solucao` em formato resumido, curto, objetivo e funcional
 - devolver `Assuntos Relacionados` sempre com `Titulo` e `URL` completa de referencia
 - nao inventar links quando nao houver alta confianca na URL
+
+O `Prompt Diagnostico` replica o contrato de analise de negocio do CLI:
+
+- mantem as 13 secoes da analise de negocio
+- exige `Riscos relacionados ao contexto do caso`
+- deixa explicito quando o contexto do plugin nao for suficiente para localizar o ponto exato no codigo
 
 ---
 

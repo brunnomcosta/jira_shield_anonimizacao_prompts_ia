@@ -277,7 +277,9 @@
     { rx: /\b[A-Z]{3}\d[A-Z]\d{2}\b/g, tag: '[PLACA]' },
     { rx: /\b\d{4}\s?\d{4}\s?\d{4}\b/g, tag: '[TITULO_ELEITOR]' },
     { rx: /\b[A-Z]{2}\d{6,7}\b/g, tag: '[PASSAPORTE]' },
-    { rx: /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)\s*[:=]\s*\S+/gi, tag: '[SENHA]' },
+    { rx: /\b(?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+[^\s,;]+/gi, tag: '[SENHA]' },
+    { rx: /\b(?:senha|password|passwd|pwd|pass|api[-_\s]?key|apikey|secret(?:[-_\s]?key)?|client[-_\s]?secret|access[-_\s]?token|auth[-_\s]?token|bearer[-_\s]?token|private[-_\s]?key|token|credencial(?:is)?|credential(?:s)?)\s*[:=]\s*(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[^\s,;]+)/gi, tag: '[SENHA]' },
+    { rx: /\b(?:senha|password|api[-_\s]?key|secret|token|credencial(?:is)?|credential(?:s)?)\s+(?:e|eh|is|igual\s+a|vale|seria)?\s*(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[A-Za-z0-9._~+/=-]{8,})/gi, tag: '[SENHA]' },
     { rx: /\+\d{1,3}[\s\-]?\(?\d{2}\)?[\s\-]?\d{4,5}[\s\-]?\d{4}\b/g, tag: '[TELEFONE]' },
     { rx: /https?:\/\/[^\s/]+\/(?:users?|perfil|profile|u|account|conta)\/[\w.%@+\-]{2,}/gi, tag: '[URL_USUARIO]' },
   ];
@@ -288,6 +290,24 @@
       pattern.rx.lastIndex = 0;
       return acc.replace(pattern.rx, pattern.tag);
     }, String(text));
+  }
+
+  function sanitizeStructuredData(value) {
+    if (typeof value === 'string') {
+      return anonymizePatterns(value);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitizeStructuredData(item));
+    }
+
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, sanitizeStructuredData(entry)])
+    );
   }
 
   function extractTicketId(fieldValue) {
@@ -344,6 +364,7 @@
   function anonymizeIssue(issue, zendeskData) {
     const map = new EntityMap();
     const fields = issue.fields || {};
+    const summaryText = typeof fields.summary === 'string' ? fields.summary.trim() : '';
 
     const autores = [
       fields.assignee && fields.assignee.displayName,
@@ -381,7 +402,7 @@
         }).filter(Boolean)
       : [];
 
-    const allTexts = [descText, ...commentTexts, ...zdCommentTexts].filter(Boolean);
+    const allTexts = [summaryText, descText, ...commentTexts, ...zdCommentTexts].filter(Boolean);
 
     allTexts.forEach((text) => {
       const signature = extractSignatureBlock(text);
@@ -396,7 +417,8 @@
 
     function process(text) {
       if (!text) return text;
-      return anonymizePatterns(map.applyToText(text));
+      const preMasked = anonymizePatterns(text);
+      return anonymizePatterns(map.applyToText(preMasked));
     }
 
     const anonComments = ((fields.comment && fields.comment.comments) || []).map((comment) => {
@@ -444,7 +466,7 @@
         description: process(descText),
       },
       fields: {
-        summary: fields.summary,
+        summary: process(summaryText),
         status: fields.status,
         priority: fields.priority,
         issuetype: fields.issuetype,
@@ -473,6 +495,8 @@
     extractTicketId,
     looksLikeZendeskComments,
     normalizeZendeskPayload,
+    anonymizePatterns,
+    sanitizeStructuredData,
     anonymizeIssue,
   };
 }(globalThis));

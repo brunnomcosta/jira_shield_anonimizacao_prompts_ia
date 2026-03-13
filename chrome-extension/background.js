@@ -10,8 +10,11 @@ const DEFAULTS = {
   zendeskToken: '',
   zendeskJiraField: 'customfield_11086',
   downloadFolder: 'shield',
-  aiProvider: 'claude',
+  aiProvider: 'gemini',
   aiAction: 'copy-and-open',
+  activePromptTemplateId: 'documentation',
+  promptTemplateOverrides: {},
+  promptTemplateAdditions: {},
 };
 
 function delay(ms) {
@@ -154,6 +157,8 @@ function buildCapabilities(settings) {
     'metadata JSON para o diagnostics.js',
     'fila de multiplas issue keys',
     'historico local das exportacoes',
+    'templates editaveis de prompt para LLM',
+    'prompt de documentacao e prompt diagnostico',
     settings.aiAction === 'copy-only'
       ? 'prompt de IA copiado para a area de transferencia'
       : 'prompt de IA copiado com abertura automatica da IA favorita',
@@ -413,7 +418,7 @@ function buildMetadata(issueKey, issue, settings) {
     zendeskTicketId = match ? match[0] : null;
   }
 
-  return {
+  return SHIELD.core.sanitizeStructuredData({
     issueKey,
     summary: fields.summary || '',
     status: fields.status && fields.status.name ? fields.status.name : '',
@@ -450,7 +455,7 @@ function buildMetadata(issueKey, issue, settings) {
       ? (typeof fields.comment.total === 'number' ? fields.comment.total : ((fields.comment.comments || []).length))
       : 0,
     zendeskTicketId,
-  };
+  });
 }
 
 async function storeAuditEntry(entry) {
@@ -610,6 +615,7 @@ async function exportSingleIssue(issueKey, mode, settings) {
   const pdfBuffer = SHIELD.pdf.generatePDF(anonIssue);
   const anonymizedText = buildAnonymizedPromptText(anonIssue);
   const metadata = buildMetadata(issueKey, issue, settings);
+  const issueSummary = (anonIssue.fields && anonIssue.fields.summary) || '';
   const folder = normalizeDownloadFolder(settings.downloadFolder);
   const pdfFilename = `${issueKey}_LGPD_anonimizado.pdf`;
   const metadataFilename = `${issueKey}_metadata.json`;
@@ -629,7 +635,7 @@ async function exportSingleIssue(issueKey, mode, settings) {
   await storeAuditEntry({
     timestamp: new Date().toISOString(),
     issueKey,
-    issueSummary: issue.fields && issue.fields.summary ? issue.fields.summary : '',
+    issueSummary,
     filename: pdfFilename,
     metadataFilename,
     mode,
@@ -644,7 +650,7 @@ async function exportSingleIssue(issueKey, mode, settings) {
 
   return {
     issueKey,
-    issueSummary: issue.fields && issue.fields.summary ? issue.fields.summary : '',
+    issueSummary,
     mode,
     ticketId,
     summary,
@@ -718,11 +724,12 @@ async function handleGenerateAIDoc(message) {
 
       const { anonIssue } = SHIELD.core.anonymizeIssue(issue, zendeskData);
       const anonymizedText = buildAnonymizedPromptText(anonIssue);
+      const issueSummary = (anonIssue.fields && anonIssue.fields.summary) || '';
 
       results.push({
         ok: true,
         issueKey,
-        issueSummary: issue.fields && issue.fields.summary ? issue.fields.summary : '',
+        issueSummary,
         mode,
         ticketId,
         anonymizedText,
@@ -738,6 +745,10 @@ async function handleGenerateAIDoc(message) {
     results,
     summary: summarizeResults(results),
   };
+}
+
+async function handlePreparePromptPayload(message) {
+  return handleGenerateAIDoc(message);
 }
 
 async function handleExportIssues(message) {
@@ -805,6 +816,9 @@ async function getSettingsSummary() {
     aiProviderLabel: getAIProviderLabel(settings.aiProvider),
     aiAction: settings.aiAction || 'copy-and-open',
     aiActionLabel: getAIActionLabel(settings.aiAction),
+    activePromptTemplateId: settings.activePromptTemplateId || 'documentation',
+    promptTemplateOverrides: settings.promptTemplateOverrides || {},
+    promptTemplateAdditions: settings.promptTemplateAdditions || {},
   };
 }
 
@@ -836,8 +850,8 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) return false;
 
-  if (message.type === 'generateAIDoc') {
-    handleGenerateAIDoc(message)
+  if (message.type === 'preparePromptPayload' || message.type === 'generateAIDoc') {
+    handlePreparePromptPayload(message)
       .then((payload) => sendResponse(payload))
       .catch((error) => sendResponse({ ok: false, error: error.message, results: [] }));
     return true;
