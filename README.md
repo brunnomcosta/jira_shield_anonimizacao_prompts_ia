@@ -22,6 +22,8 @@ Regras atuais do diagnÃ³stico:
 - os includes `.ch` do ERP sÃ£o usados para enriquecer a busca por conteÃºdo em fontes `.prw/.prx/.tlpp`
 - antes do envio ao LLM o CLI mostra progresso, provedor em uso, tempo decorrido e compacta a janela de contexto quando necessÃ¡rio
 
+- em terminal interativo, o `diagnostics.js` oferece onboarding para `JIRA_TOKEN` e `WORKSPACE_*`, gravando no `.env` do projeto e no ambiente do usuário do Windows
+
 ---
 
 ## Como funciona
@@ -59,7 +61,7 @@ node src/diagnostics.js DMANQUALI-12311 --lgpd --business  # ambas
 
 Modo padrão / --business (análise de negócio):
   1. Lê o PDF anonimizado e os metadados estruturais do ticket (metadata.json)
-  2. Alerta se JIRA_TOKEN / WORKSPACE_* estiverem ausentes ou inválidos
+  2. Se detectar `JIRA_TOKEN` / `WORKSPACE_*` ausentes ou inválidos em terminal interativo, pergunta se deseja preenchê-los e persiste no `.env` + ambiente do usuário do Windows
   3. Sanitiza conteúdo antes de enviar ao LLM
   4. Exibe confirmação pré-envio com nomes dos arquivos e indica se cada artefato vai completo ou por trecho
   5. Mostra progresso durante a chamada ao LLM, com provedor, comandos e tempo decorrido
@@ -72,12 +74,13 @@ Modo padrão / --business (análise de negócio):
 Modo --lgpd (qualidade da anonimização):
   1. Extrai texto do PDF anonimizado
   2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
-  3. Sanitiza conteúdo (nenhuma PII real sai do ambiente)
-  4. Exibe confirmação pré-envio com nomes dos arquivos e indica se cada artefato vai completo ou por trecho
-  5. Mostra progresso durante a chamada ao LLM, com provedor, comandos e tempo decorrido
-  6. Compacta a janela de contexto antes do envio quando necessário
-  7. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
-  8. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
+  3. Se detectar `JIRA_TOKEN` / `WORKSPACE_*` ausentes ou inválidos em terminal interativo, pergunta se deseja preenchê-los e persiste no `.env` + ambiente do usuário do Windows
+  4. Sanitiza conteúdo (nenhuma PII real sai do ambiente)
+  5. Exibe confirmação pré-envio com nomes dos arquivos e indica se cada artefato vai completo ou por trecho
+  6. Mostra progresso durante a chamada ao LLM, com provedor, comandos e tempo decorrido
+  7. Compacta a janela de contexto antes do envio quando necessário
+  8. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
+  9. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
 
   (fallback automático configurável: Claude CLI → Codex CLI → GitHub Copilot → API key)
 ```
@@ -192,6 +195,8 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 | `WORKSPACE_EXTENSIONS` | Extensões de arquivo a incluir (padrão: `js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp`) |
 
 Quando `WORKSPACE_ERP_INCLUDE_DIR` está configurado, arquivos `.prw`, `.prx` e `.tlpp` passam a considerar o conteúdo dos `.ch` incluídos no cabeçalho apenas para melhorar o rankeamento por conteúdo. O trecho enviado ao LLM continua sendo do fonte principal.
+
+Em terminal interativo, `node src/diagnostics.js ...` detecta `JIRA_TOKEN`, `WORKSPACE_ERP_BACKEND_DIR`, `WORKSPACE_MOBILE_FRONTEND_DIR` e `WORKSPACE_ERP_INCLUDE_DIR` ausentes ou inválidos e pergunta se você quer preenchê-los na hora. Quando você confirma um valor, ele é aplicado imediatamente na execução atual, gravado no `.env` do projeto e também persistido no ambiente do usuário do Windows com `setx`.
 
 ---
 

@@ -18,7 +18,8 @@ import { dirname, resolve, join, basename, extname } from 'path';
 import dotenv from 'dotenv';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: resolve(__dirname, '..', '.env') });
+const ENV_FILE_PATH = resolve(__dirname, '..', '.env');
+dotenv.config({ path: ENV_FILE_PATH });
 
 import fs from 'fs';
 import os from 'os';
@@ -40,6 +41,37 @@ const ENV_ALIASES = {
   WORKSPACE_ERP_INCLUDE_DIR: ['WORKSPACE_ERP_INCLUDE_DIR', 'WORKSPACE_INCLUDE_DIR'],
   JIRA_TOKEN: ['JIRA_TOKEN'],
 };
+
+const RUNTIME_CONFIG_ITEMS = [
+  {
+    key: 'WORKSPACE_ERP_BACKEND_DIR',
+    label: 'Workspace ERP',
+    question: 'Deseja informar agora o diretório do workspace ERP / back-end?',
+    input: 'Informe o caminho do workspace ERP / back-end: ',
+    kind: 'path',
+  },
+  {
+    key: 'WORKSPACE_MOBILE_FRONTEND_DIR',
+    label: 'Workspace App mobile',
+    question: 'Deseja informar agora o diretório do app mobile / front-end?',
+    input: 'Informe o caminho do app mobile / front-end: ',
+    kind: 'path',
+  },
+  {
+    key: 'WORKSPACE_ERP_INCLUDE_DIR',
+    label: 'Includes do ERP',
+    question: 'Deseja informar agora o diretório dos includes do ERP?',
+    input: 'Informe o caminho do diretório de includes do ERP: ',
+    kind: 'path',
+  },
+  {
+    key: 'JIRA_TOKEN',
+    label: 'Token Jira',
+    question: 'Deseja informar agora o JIRA_TOKEN?',
+    input: 'Cole o JIRA_TOKEN: ',
+    kind: 'token',
+  },
+];
 
 function getEnvValue(name) {
   const aliases = ENV_ALIASES[name] || [name];
@@ -65,6 +97,223 @@ function getWorkspaceMobileFrontendDir() {
 
 function getWorkspaceErpIncludeDir() {
   return resolveOptionalEnvPath('WORKSPACE_ERP_INCLUDE_DIR');
+}
+
+function isDirectoryPath(value) {
+  try {
+    return fs.statSync(value).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function normalizePersistedEnvValue(key, value) {
+  const clean = String(value || '').trim();
+  if (!clean) return clean;
+  if (key.startsWith('WORKSPACE_')) {
+    return resolve(clean).replace(/\\/g, '/');
+  }
+  return clean;
+}
+
+function quoteEnvValue(value) {
+  if (!/[\s#"]/u.test(value)) return value;
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function setRuntimeEnvValue(key, value) {
+  const normalized = normalizePersistedEnvValue(key, value);
+  process.env[key] = normalized;
+  return normalized;
+}
+
+function upsertEnvFileValue(key, value) {
+  const normalized = normalizePersistedEnvValue(key, value);
+  const aliases = [...new Set([key, ...(ENV_ALIASES[key] || [])])];
+  const assignment = `${key}=${quoteEnvValue(normalized)}`;
+  const lines = fs.existsSync(ENV_FILE_PATH)
+    ? fs.readFileSync(ENV_FILE_PATH, 'utf-8').split(/\r?\n/)
+    : [];
+
+  let replaced = false;
+  const nextLines = [];
+  for (const line of lines) {
+    const matchesAlias = aliases.some((alias) => new RegExp(`^\\s*#?\\s*${alias}\\s*=`).test(line));
+    if (!matchesAlias) {
+      nextLines.push(line);
+      continue;
+    }
+    if (!replaced) {
+      nextLines.push(assignment);
+      replaced = true;
+    }
+  }
+
+  if (!replaced) {
+    while (nextLines.length > 0 && nextLines[nextLines.length - 1] === '') nextLines.pop();
+    if (nextLines.length > 0) nextLines.push('');
+    nextLines.push(assignment);
+  }
+
+  fs.writeFileSync(ENV_FILE_PATH, `${nextLines.join(os.EOL)}${os.EOL}`, 'utf-8');
+  return normalized;
+}
+
+function maskValueForDisplay(key, value) {
+  if (key === 'JIRA_TOKEN') return '<oculto>';
+  return value;
+}
+
+function describeCurrentConfigValue(item) {
+  if (item.key === 'JIRA_TOKEN') {
+    if (hasJiraAuthConfigured()) return 'credenciais Jira já configuradas';
+    return 'não configurado';
+  }
+
+  const current = getEnvValue(item.key);
+  if (!current) return 'não configurado';
+
+  const resolved = resolve(current);
+  if (!isDirectoryPath(resolved)) return `${resolved} (inválido ou inexistente)`;
+  return resolved;
+}
+
+function validateRuntimeConfigValue(item, value) {
+  const clean = String(value || '').trim();
+  if (!clean) {
+    return { ok: false, message: 'Valor vazio.' };
+  }
+
+  if (item.kind === 'token') {
+    if (!hasValue(clean, ['seu_token_pessoal_aqui', 'seu_token_aqui']) || clean.length < 12) {
+      return { ok: false, message: 'Informe um token Jira válido.' };
+    }
+    return { ok: true, normalized: clean };
+  }
+
+  const normalized = normalizePersistedEnvValue(item.key, clean);
+  if (!isDirectoryPath(normalized)) {
+    return { ok: false, message: 'Diretório não encontrado.' };
+  }
+  return { ok: true, normalized };
+}
+
+function askQuestion(rl, question) {
+  return new Promise((resolve) => rl.question(question, (answer) => resolve(answer)));
+}
+
+function canRunInteractiveSetup() {
+  return !!(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+function getRuntimeConfigurationRequests() {
+  const requests = [];
+
+  for (const item of RUNTIME_CONFIG_ITEMS) {
+    if (item.key === 'JIRA_TOKEN') {
+      if (!hasJiraAuthConfigured()) requests.push(item);
+      continue;
+    }
+
+    const current = getEnvValue(item.key);
+    if (!current || !isDirectoryPath(resolve(current))) {
+      requests.push(item);
+    }
+  }
+
+  return requests;
+}
+
+async function persistRuntimeConfiguration(item, value) {
+  const normalized = upsertEnvFileValue(item.key, value);
+  setRuntimeEnvValue(item.key, normalized);
+
+  console.log(`   ${c.gray}-> Atualizando .env: ${item.key}=${maskValueForDisplay(item.key, normalized)}${c.reset}`);
+
+  if (process.platform !== 'win32') {
+    console.log(`   ${c.gray}-> Ambiente do usuário não alterado automaticamente fora do Windows${c.reset}`);
+    return;
+  }
+
+  const displayedValue = maskValueForDisplay(item.key, normalized);
+  console.log(`   ${c.gray}-> Comando: setx ${item.key} ${displayedValue}${c.reset}`);
+
+  await new Promise((resolvePromise, reject) => {
+    const child = spawn('setx', [item.key, normalized], { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      reject(new Error((stderr || stdout || `setx finalizou com código ${code}`).trim()));
+    });
+  });
+}
+
+async function maybeCollectRuntimeConfiguration() {
+  if (!canRunInteractiveSetup()) return;
+
+  const requests = getRuntimeConfigurationRequests();
+  if (requests.length === 0) return;
+
+  console.log(`${c.bold}${c.yellow}┌─────────────────────────────────────────────────────────────┐`);
+  console.log(`│  ⚙️  Configuração inicial do diagnostics.js                 │`);
+  console.log(`└─────────────────────────────────────────────────────────────┘${c.reset}`);
+  console.log();
+  console.log('  Itens ausentes ou inválidos podem ser preenchidos agora.');
+  console.log(`  ${c.gray}Os valores confirmados são gravados no .env e no ambiente do usuário do Windows.${c.reset}`);
+  console.log();
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  try {
+    for (const item of requests) {
+      console.log(`  ${c.yellow}• ${item.label}${c.reset}`);
+      console.log(`    Atual: ${c.gray}${describeCurrentConfigValue(item)}${c.reset}`);
+
+      const proceed = (await askQuestion(rl, `    ${item.question} ${c.bold}[s/N]${c.reset} `)).trim().toLowerCase() === 's';
+      if (!proceed) {
+        console.log(`    ${c.gray}-> Mantido sem alteração${c.reset}`);
+        console.log();
+        continue;
+      }
+
+      while (true) {
+        const raw = await askQuestion(rl, `    ${item.input}`);
+        if (!String(raw || '').trim()) {
+          console.log(`    ${c.gray}-> Preenchimento cancelado para ${item.label}${c.reset}`);
+          break;
+        }
+        const validation = validateRuntimeConfigValue(item, raw);
+        if (!validation.ok) {
+          console.log(`    ${c.red}${validation.message}${c.reset}`);
+          console.log(`    ${c.gray}-> Enter vazio cancela este item${c.reset}`);
+          continue;
+        }
+
+        try {
+          await persistRuntimeConfiguration(item, validation.normalized);
+          console.log(`    ${c.green}OK${c.reset} ${item.label} salvo para a execução atual e para os próximos terminais.`);
+        } catch (err) {
+          console.log(`    ${c.red}Falha ao persistir ${item.label}: ${err.message}${c.reset}`);
+        }
+        break;
+      }
+      console.log();
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 // Extensões de arquivo aceitas para leitura do workspace
@@ -1950,7 +2199,7 @@ function hasValue(value, placeholders = []) {
 }
 
 function hasJiraAuthConfigured() {
-  const token = process.env.JIRA_TOKEN;
+  const token = getEnvValue('JIRA_TOKEN');
   const user  = process.env.JIRA_USER;
   const pass  = process.env.JIRA_PASSWORD;
 
@@ -2623,6 +2872,8 @@ async function main() {
   } else {
     console.log(`   ${c.gray}→ Metadados não encontrados — exporte com index.js para habilitar análise de negócio enriquecida${c.reset}`);
   }
+
+  await maybeCollectRuntimeConfiguration();
 
   // 3. Extrair texto do PDF
   process.stdout.write(`${c.yellow}⏳ Extraindo texto do PDF...${c.reset}`);
