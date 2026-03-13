@@ -20,7 +20,7 @@
         <div class="row panel-head">
           <div>
             <h2 class="section-title">Resumo operacional</h2>
-            <p class="section-copy">A extensao cobre o modulo de exportacao e gera os arquivos de entrada do diagnostics.js.</p>
+            <p class="section-copy">A extensao atua como camada de coleta e preparo: le a issue do Jira, busca o ticket Zendesk vinculado, exporta um PDF anonimizado com os dados do titular e gera os arquivos de entrada para o diagnostics.js rodar no CLI Node.js.</p>
           </div>
         </div>
         <div id="strategy-summary" class="summary-grid summary-grid-vertical"></div>
@@ -36,83 +36,8 @@
       <section class="panel stack">
         <div class="row panel-head">
           <div>
-            <h2 class="section-title">Jira</h2>
-            <p class="section-copy">Obrigatorio. Sem JIRA_BASE_URL a extensao nao consegue ler a issue.</p>
-          </div>
-        </div>
-
-        <div class="grid cols-2">
-          <div class="field">
-            <label for="jiraBaseUrl">JIRA_BASE_URL</label>
-            <input id="jiraBaseUrl" type="url" placeholder="https://jira.empresa.com">
-            <div class="hint">Sem barra final. Ex.: https://jiraproducao.totvs.com.br</div>
-          </div>
-
-          <div class="field">
-            <label for="zendeskJiraField">ZENDESK_JIRA_FIELD</label>
-            <input id="zendeskJiraField" type="text" placeholder="customfield_11086">
-            <div class="hint">Campo Jira que guarda o ticket Zendesk vinculado.</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel stack">
-        <div class="row panel-head">
-          <div>
-            <h2 class="section-title">Workspace local para Prompt Diagnostico</h2>
-            <p class="section-copy">Opcional. O plugin pode anexar trechos de fontes locais ao Prompt Diagnostico quando o navegador tiver permissao de leitura.</p>
-          </div>
-        </div>
-
-        <div class="note-box">
-          Regra espelhada do diagnostics.js: ERP / back-end e sempre elegivel. App mobile / front-end so entra quando o ticket trouxer sinais de Minha Producao, app mobile, celular, tablet ou sinonimos. Os caminhos do <code>.env</code> deixam a configuracao visivel e sincronizada, mas o navegador so consegue ler os fontes depois que voce vincula a permissao local de leitura.
-        </div>
-
-        <div class="field">
-          <label for="projectRootDirLabel">Raiz local do projeto SHIELD (.env)</label>
-          <input id="projectRootDirLabel" type="text" readonly placeholder="Nenhuma raiz de projeto selecionada">
-          <div class="row actions">
-            <button id="pick-project-root" class="secondary" type="button">Selecionar raiz do projeto</button>
-            <button id="reload-env" class="ghost" type="button">Recarregar .env</button>
-            <button id="clear-project-root" class="ghost" type="button">Desvincular</button>
-          </div>
-          <div id="projectRootHint" class="hint">Quando disponivel, o plugin exibe automaticamente a raiz do projeto identificada no build da extensao. Ao vincular essa raiz manualmente, ele tambem passa a ler e atualizar o arquivo <code>.env</code> local desta pasta.</div>
-        </div>
-
-        <div class="grid cols-2">
-          <div class="field">
-            <label for="workspaceErpBackendDirLabel">WORKSPACE_ERP_BACKEND_DIR</label>
-            <input id="workspaceErpBackendDirLabel" type="text" placeholder="C:/fontes/erp">
-            <div class="row actions">
-              <button id="pick-workspace-erp-backend" class="secondary" type="button">Vincular permissao de leitura</button>
-              <button id="clear-workspace-erp-backend" class="ghost" type="button">Remover permissao</button>
-            </div>
-            <div id="workspaceErpBackendHint" class="hint">Este valor deve refletir o <code>.env</code>. A permissao do navegador e gerenciada separadamente para que o plugin possa ler os fontes locais. O modo <code>Prompt Diagnostico + Contexto Fontes</code> nao prossegue sem ao menos um snippet real do ERP ou do mobile.</div>
-          </div>
-
-          <div class="field">
-            <label for="workspaceMobileFrontendDirLabel">WORKSPACE_MOBILE_FRONTEND_DIR</label>
-            <input id="workspaceMobileFrontendDirLabel" type="text" placeholder="C:/fontes/app-mobile">
-            <div class="row actions">
-              <button id="pick-workspace-mobile-frontend" class="secondary" type="button">Vincular permissao de leitura</button>
-              <button id="clear-workspace-mobile-frontend" class="ghost" type="button">Remover permissao</button>
-            </div>
-            <div id="workspaceMobileFrontendHint" class="hint">Esse valor deve refletir o <code>.env</code>. O plugin so considera esse front-end no Prompt Diagnostico quando detectar contexto mobile e quando a permissao local do navegador ja estiver vinculada.</div>
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="workspaceErpIncludeDirLabel">WORKSPACE_ERP_INCLUDE_DIR</label>
-          <input id="workspaceErpIncludeDirLabel" type="text" placeholder="C:/totvs/includes">
-          <div id="workspaceErpIncludeHint" class="hint">Este valor tambem e sincronizado com o <code>.env</code>. O plugin ainda nao usa includes locais para montar contexto, mas precisa exibir e preservar a mesma configuracao do projeto.</div>
-        </div>
-      </section>
-
-      <section class="panel stack">
-        <div class="row panel-head">
-          <div>
             <h2 class="section-title">IA para geracao de documentacao</h2>
-            <p class="section-copy">Defina a IA preferida e o comportamento do botao: apenas copiar o prompt para a memoria ou copiar e abrir a URL da IA favorita.</p>
+            <p class="section-copy">Usado pelo botao <strong>Gerar Documentacao</strong> no popup da extensao. Define qual IA recebe o prompt consolidado e o que acontece ao clicar: so copiar para a area de transferencia, ou copiar e abrir a URL da IA em nova aba.</p>
           </div>
         </div>
         <div class="field">
@@ -160,23 +85,75 @@
       <section class="panel stack">
         <div class="row panel-head">
           <div>
-            <h2 class="section-title">Templates de prompt</h2>
-            <p class="section-copy">O template padrao fica em <code>chrome-extension/prompt-templates.js</code>. Aqui voce pode sobrescrever a base, adicionar regras complementares e revisar a versao consolidada do prompt enviado a LLM.</p>
+            <h2 class="section-title">Workspace local para Prompt Diagnostico</h2>
+            <p class="section-copy">Opcional. Quando configurado, o plugin anexa trechos reais dos fontes locais ao <strong>Prompt Diagnostico</strong>, enriquecendo o contexto enviado a LLM. Requer permissao de leitura concedida pelo navegador para cada pasta.</p>
           </div>
         </div>
 
-        <div class="note-box">Esta configuracao interfere apenas no prompt enviado a LLM. As regras internas de anonimização continuam fora deste fluxo e permanecem centralizadas no pipeline de sanitizacao.</div>
+        <div class="note-box">
+          <strong>Regra de elegibilidade:</strong> fontes ERP / back-end sao sempre incluidas. Fontes mobile / front-end so entram quando o ticket trouxer palavras-chave como <em>Minha Producao, app mobile, celular, tablet</em> ou sinonimos. Os caminhos definidos aqui ficam sincronizados com o <code>.env</code> do projeto — mas o navegador so consegue ler os arquivos apos voce clicar em <strong>Vincular permissao de leitura</strong> em cada pasta.
+        </div>
+
+        <div class="field">
+          <label for="projectRootDirLabel">Raiz local do projeto SHIELD (.env)</label>
+          <input id="projectRootDirLabel" type="text" readonly placeholder="Nenhuma raiz de projeto selecionada">
+          <div class="row actions">
+            <button id="pick-project-root" class="secondary" type="button">Selecionar raiz do projeto</button>
+            <button id="reload-env" class="ghost" type="button">Recarregar .env</button>
+            <button id="clear-project-root" class="ghost" type="button">Desvincular</button>
+          </div>
+          <div id="projectRootHint" class="hint">Quando disponivel, o plugin preenche automaticamente com a raiz identificada no build. Ao vincular manualmente, o plugin passa a ler e gravar o <code>.env</code> desta pasta — mantendo os caminhos do workspace sincronizados entre a extensao e o CLI Node.js.</div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="workspaceErpBackendDirLabel">WORKSPACE_ERP_BACKEND_DIR</label>
+            <input id="workspaceErpBackendDirLabel" type="text" placeholder="C:/fontes/erp">
+            <div class="row actions">
+              <button id="pick-workspace-erp-backend" class="secondary" type="button">Vincular permissao de leitura</button>
+              <button id="clear-workspace-erp-backend" class="ghost" type="button">Remover permissao</button>
+            </div>
+            <div id="workspaceErpBackendHint" class="hint">Caminho para os fontes do ERP / back-end Protheus. Sincronizado com o <code>.env</code>. A permissao do navegador e concedida separadamente e pode ser revogada a qualquer momento. O modo <strong>Prompt Diagnostico + Contexto Fontes</strong> exige ao menos um snippet real desta pasta ou da mobile para prosseguir.</div>
+          </div>
+
+          <div class="field">
+            <label for="workspaceMobileFrontendDirLabel">WORKSPACE_MOBILE_FRONTEND_DIR</label>
+            <input id="workspaceMobileFrontendDirLabel" type="text" placeholder="C:/fontes/app-mobile">
+            <div class="row actions">
+              <button id="pick-workspace-mobile-frontend" class="secondary" type="button">Vincular permissao de leitura</button>
+              <button id="clear-workspace-mobile-frontend" class="ghost" type="button">Remover permissao</button>
+            </div>
+            <div id="workspaceMobileFrontendHint" class="hint">Caminho para os fontes do app mobile / front-end. Sincronizado com o <code>.env</code>. So e incluido no Prompt Diagnostico quando o ticket indicar contexto mobile <em>e</em> a permissao do navegador ja estiver vinculada.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="workspaceErpIncludeDirLabel">WORKSPACE_ERP_INCLUDE_DIR</label>
+          <input id="workspaceErpIncludeDirLabel" type="text" placeholder="C:/totvs/includes">
+          <div id="workspaceErpIncludeHint" class="hint">Diretorio de includes do ERP (ex.: <code>C:/totvs/includes</code>). Sincronizado com o <code>.env</code>. Ainda nao e usado para montar contexto de fontes, mas e preservado para manter paridade com a configuracao do CLI.</div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Templates de prompt</h2>
+            <p class="section-copy">Controla o texto de instrucao enviado a LLM ao usar o botao <strong>Gerar Documentacao</strong>. O template padrao esta em <code>chrome-extension/prompt-templates.js</code> e pode ser sobrescrito ou complementado aqui sem alterar o arquivo fisico.</p>
+          </div>
+        </div>
+
+        <div class="note-box"><strong>Importante:</strong> esta configuracao afeta apenas o prompt enviado a LLM. As regras de anonimizacao dos dados do titular (CPF, nome, endeco, etc.) sao aplicadas antes, no pipeline de sanitizacao, e nao podem ser alteradas por aqui.</div>
 
         <div class="field">
           <label for="promptTemplateId">Template ativo</label>
           <select id="promptTemplateId"></select>
-          <div class="hint">Precedencia: override do usuario > template padrao do arquivo. Depois disso, as regras complementares do usuario sao anexadas ao final.</div>
+          <div class="hint">Precedencia de montagem: <strong>override do usuario</strong> (substitui a base inteira) → <strong>template padrao do arquivo</strong> (quando nao ha override) → <strong>regras complementares</strong> (sempre anexadas ao final). O resultado final e mostrado no campo <em>Template final consolidado</em> abaixo.</div>
         </div>
 
         <div class="field">
           <label for="promptTemplateSource">Arquivo fonte do template</label>
           <input id="promptTemplateSource" type="text" readonly>
-          <div class="hint">O plugin deve conseguir enxergar qual arquivo fisico define o template padrao desta opcao.</div>
+          <div class="hint">Indica qual arquivo fisico da extensao define o template padrao do tipo selecionado. Util para saber onde editar caso voce queira alterar o padrao diretamente no codigo.</div>
         </div>
 
         <div class="field">
@@ -188,19 +165,42 @@
         <div class="field">
           <label for="promptTemplateOverride">Override do template base</label>
           <textarea id="promptTemplateOverride" class="template-editor" placeholder="Deixe vazio para usar o template padrao do arquivo."></textarea>
-          <div class="hint">Use apenas se voce quiser substituir totalmente a base padrao para este tipo de prompt.</div>
+          <div class="hint">Substitui <em>completamente</em> o template base do arquivo para este tipo. Deixe vazio para usar o padrao. Use quando o padrao do sistema nao atender ao contexto do seu time.</div>
         </div>
 
         <div class="field">
           <label for="promptTemplateAddition">Regras complementares do usuario</label>
           <textarea id="promptTemplateAddition" class="template-editor" placeholder="Ex.: priorize o modulo Financeiro e use nomenclatura interna validada pelo time."></textarea>
-          <div class="hint">Estas instrucoes sao anexadas ao final da base consolidada.</div>
+          <div class="hint">Instrucoes adicionais que sao sempre anexadas ao final do template base (ou do override). Ideal para especificidades do time: modulo prioritario, nomenclatura interna, nivel de detalhe esperado, etc.</div>
         </div>
 
         <div class="field">
           <label for="promptTemplatePreview">Template final consolidado</label>
           <textarea id="promptTemplatePreview" class="template-editor template-preview" readonly></textarea>
-          <div id="promptTemplateHint" class="hint">Os placeholders da issue sao preservados neste preview e sao resolvidos apenas na hora de gerar o prompt.</div>
+          <div id="promptTemplateHint" class="hint">Visualizacao somente leitura do prompt que sera enviado. Os marcadores como <code>{{titulo}}</code> e <code>{{descricao}}</code> sao preenchidos com os dados reais da issue somente no momento em que voce clicar em <strong>Gerar Documentacao</strong>.</div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Jira</h2>
+            <p class="section-copy">Obrigatorio. Usado em todas as operacoes da extensao: leitura da issue, busca do ticket Zendesk vinculado, download de anexos e geracao do PDF anonimizado.</p>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="jiraBaseUrl">JIRA_BASE_URL</label>
+            <input id="jiraBaseUrl" type="url" placeholder="https://jira.empresa.com">
+            <div class="hint">URL base da instancia Jira, sem barra final. Usada em todas as chamadas a API REST do Jira. Ex.: https://jiraproducao.totvs.com.br</div>
+          </div>
+
+          <div class="field">
+            <label for="zendeskJiraField">ZENDESK_JIRA_FIELD</label>
+            <input id="zendeskJiraField" type="text" placeholder="customfield_11086">
+            <div class="hint">Nome tecnico do campo customizado da issue Jira que contem o ID do ticket Zendesk vinculado. Usado para localizar automaticamente o ticket do cliente sem precisar abrir o Zendesk. Para confirmar o campo correto da sua instancia, consulte <code>/rest/api/2/field</code> na API do Jira.</div>
+          </div>
         </div>
       </section>
 
@@ -208,7 +208,7 @@
         <div class="row panel-head">
           <div>
             <h2 class="section-title">Autenticacao Jira</h2>
-            <p class="section-copy">Prioridade: token pessoal, depois usuario/senha, depois sessao ja aberta no navegador.</p>
+            <p class="section-copy">A extensao tenta autenticar na ordem: <strong>1. token pessoal</strong> → <strong>2. usuario + senha</strong> → <strong>3. sessao ja aberta no navegador</strong>. Preencha apenas o metodo que voce usa; os demais podem ficar em branco.</p>
           </div>
         </div>
 
@@ -216,13 +216,13 @@
           <div class="field">
             <label for="jiraToken">JIRA_TOKEN</label>
             <input id="jiraToken" type="password" placeholder="Opcional">
-            <div class="hint">Recomendado para Jira 8.14+.</div>
+            <div class="hint">Token de acesso pessoal (PAT). Metodo preferido para Jira 8.14+. Gerado em <em>Perfil → Seguranca → Tokens de acesso pessoal</em> na interface do Jira.</div>
           </div>
 
           <div class="field">
             <label for="downloadFolder">Pasta de download</label>
             <input id="downloadFolder" type="text" placeholder="shield">
-            <div class="hint">Subpasta relativa dentro de Downloads.</div>
+            <div class="hint">Subpasta relativa dentro da pasta Downloads do sistema. Todos os arquivos exportados (PDF, JSON) sao salvos aqui. Ex.: <code>shield</code> → <code>Downloads/shield/</code>.</div>
           </div>
         </div>
 
@@ -243,7 +243,7 @@
         <div class="row panel-head">
           <div>
             <h2 class="section-title">Zendesk</h2>
-            <p class="section-copy">Opcional. Se nao preencher, a extensao tenta o proxy Jira e depois a aba Zendesk da issue.</p>
+            <p class="section-copy">Opcional. Quando preenchido, a extensao busca os dados do ticket Zendesk diretamente pela API. Se nao configurado, a extensao tenta recuperar o conteudo via proxy Jira ou pela aba Zendesk ja aberta no navegador — nessa ordem.</p>
           </div>
         </div>
 
@@ -268,7 +268,7 @@
           <div class="field">
             <label>Escopo</label>
             <div class="note-box">
-              O diagnostico com LLM, leitura de workspace local e analise ERP/mobile continuam no CLI Node.js.
+              <strong>Escopo da extensao:</strong> exportacao LGPD, busca de dados do titular e geracao de prompt. O diagnostico completo com LLM, leitura de workspace local e analise ERP/mobile continuam sendo feitos pelo CLI Node.js (<code>npm run diagnose</code>).
             </div>
           </div>
         </div>

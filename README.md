@@ -10,21 +10,6 @@ Ferramenta CLI Node.js com dois módulos complementares para conformidade LGPD n
 
 Compatível com Jira Server 8.x. A exportação ocorre **inteiramente no ambiente local** — nenhum dado pessoal é enviado a serviços externos.
 
-AtualizaÃ§Ã£o dos nomes padrÃ£o de workspace:
-
-- `WORKSPACE_ERP_BACKEND_DIR` substitui `WORKSPACE_BACKEND_DIR`
-- `WORKSPACE_MOBILE_FRONTEND_DIR` substitui `WORKSPACE_FRONTEND_DIR`
-- `WORKSPACE_ERP_INCLUDE_DIR` substitui `WORKSPACE_INCLUDE_DIR`
-
-Regras atuais do diagnÃ³stico:
-
-- o workspace de ERP / back-end Ã© sempre elegÃ­vel para correlaÃ§Ã£o
-- o workspace mobile / front-end sÃ³ entra quando o ticket indicar contexto de app mobile, Minha ProduÃ§Ã£o, celular, tablet ou sinÃ´nimos
-- os includes `.ch` do ERP sÃ£o usados para enriquecer a busca por conteÃºdo em fontes `.prw/.prx/.tlpp`
-- antes do envio ao LLM o CLI mostra progresso, provedor em uso, tempo decorrido e compacta a janela de contexto quando necessÃ¡rio
-
-- em terminal interativo, o `diagnostics.js` oferece onboarding para `JIRA_TOKEN` e `WORKSPACE_*`, gravando no `.env` do projeto e no ambiente do usuário do Windows
-
 Melhorias recentes:
 
 - a extensao Chrome agora pode preparar documentacao tecnica com IA a partir do ticket anonimizado, copiando o prompt e abrindo Claude, ChatGPT, Gemini ou Copilot
@@ -36,69 +21,22 @@ Melhorias recentes:
 - o nome da empresa cliente (`customfield_11071`) e automaticamente registrado no EntityMap antes do processamento, garantindo substituicao consistente por `[EMPRESA-N]` em todos os textos da issue
 - os identificadores sensiveis do cliente — codigo de conta/CRM (`customfield_11085`), campo identificador (`customfield_11053`) e codigo do cliente (`customfield_11038`) — sao anonimizados 100% e nulificados na saida, com seus valores registrados no EntityMap para mascaramento em todo o texto
 
-## Evolucao em andamento
+## Arquitetura e decisões técnicas
 
-### Visao geral atual do projeto
+### Visão geral
 
-- O CLI continua sendo o ponto canonico de exportacao anonimizada e diagnostico com LLM.
-- A extensao Chrome continua restrita ao fluxo no navegador, sem acesso direto ao workspace local do VSCode.
-- A evolucao atual esta priorizando seguranca do pre-processamento, rastreabilidade de etapas e padronizacao de templates.
+- O CLI é o ponto canônico de exportação anonimizada e diagnóstico com LLM.
+- A extensão Chrome é complementar: opera inteiramente no navegador, sem acesso direto ao workspace local por padrão, mas pode ler diretórios locais via permissão explícita do navegador.
+- O mascaramento de segredos ocorre antes e depois da aplicação lexical do `EntityMap`, para evitar que falsos positivos de contexto quebrem palavras-chave como `password` e impeçam a redação do valor.
+- O `metadata.json` gerado junto ao PDF contém mascaramento textual recursivo para não reaproveitar valores sensíveis em claro.
+- Templates editáveis da extensão são limitados ao texto do prompt enviado à LLM — nenhuma opção do plugin altera as regras internas de anonimização.
+- `Prompt Documentação` e `Prompt Diagnóstico` possuem arquivos físicos distintos de template e compartilham apenas a infraestrutura de registro/renderização.
 
-### Objetivo atual da evolucao
+### Riscos e limitações conhecidos
 
-- Garantir mascaramento consistente de segredos, tokens, credenciais e dados sensiveis textuais antes de exportacao reaproveitada, geracao de prompt e envio para LLM.
-- Evoluir o template de analise de negocio para incluir riscos relacionados ao contexto do caso.
-- Preparar infraestrutura retomavel para novos tipos de prompt no plugin Chrome, com templates visiveis e editaveis sem interferir na anonimização.
-
-### Status geral da execucao
-
-- Etapa 1 concluida em 2026-03-13: mascaramento central de dados sensiveis textuais no CLI e na extensao, com testes automatizados.
-- Etapa 2 concluida em 2026-03-13: a analise de negocio passou a exigir `Riscos relacionados ao contexto do caso` no template padrao, evitando riscos genericos e focando no impacto do caso reportado.
-- Etapa 3 concluida em 2026-03-13: a extensao Chrome passou a expor o template padrao do sistema, override do usuario, regras complementares e preview consolidado do prompt enviado a LLM.
-- Etapa 4 concluida em 2026-03-13: o plugin ganhou `Prompt Diagnostico` com outro arquivo fisico de template, separado do template de documentacao e com configuracao isolada por `templateId`.
-- Etapa 5 concluida em 2026-03-13: o plugin passou a expor `Prompt Diagnostico + Contexto Fontes`, montar o prompt final no service worker e bloquear o envio quando nenhum snippet real de fonte foi anexado.
-
-### Etapas concluidas
-
-- Criado ponto unico de mascaramento textual em `src/sensitiveTextSanitizer.js`.
-- `src/anonymizer.js` passou a minerar e anonimizar `summary`.
-- `src/index.js` passou a salvar `metadata.json` com mascaramento textual recursivo e nao exibir `summary` bruto no log de exportacao.
-- `src/diagnostics.js` passou a sanitizar metadados estruturais antes da montagem do prompt.
-- `chrome-extension/shield-core.js` passou a anonimizar `summary`, expor sanitizacao estruturada e proteger `metadata`/prompt/historico do plugin.
-- Cobertura automatizada adicionada em `tests/`.
-- O template de analise de negocio em `src/diagnostics.js` passou a exigir uma secao explicita de riscos relacionados ao contexto do caso, com instrucao para nao listar riscos genericos, e a cobertura foi adicionada em `tests/diagnosticsPromptContracts.test.js`.
-- A extensao Chrome passou a usar `chrome-extension/prompt-templates.js` como ponto unico para templates de prompt da LLM, com visualizacao do template padrao, override opcional, regras complementares e preview consolidado nas opcoes.
-- A extensao Chrome passou a carregar tambem `chrome-extension/prompt-template-diagnostic.js`, espelhando o contrato do diagnostico de negocio do CLI em um arquivo separado e configuravel de forma independente.
-- `Prompt Diagnostico + Contexto Fontes` agora so prossegue quando o navegador realmente consegue anexar snippets do workspace local; sem isso, o plugin falha de forma explicita em vez de gerar um prompt sem fontes.
-
-### Proximas etapas
-
-- Avaliar uso de includes locais do ERP tambem no plugin, sem duplicar regras do `diagnostics.js`.
-- Revisar se vale extrair um modulo compartilhado para a infraestrutura de templates entre CLI e extensao.
-
-### Decisoes tecnicas tomadas
-
-- O mascaramento de segredos passou a ocorrer antes e depois da aplicacao lexical do `EntityMap`, para evitar que falsos positivos de contexto quebrem palavras-chave como `password` e impeçam a redacao do valor.
-- O `metadata.json` permanece util para diagnostico, mas agora com mascaramento textual recursivo para nao reaproveitar valores sensiveis em claro.
-- A extensao Chrome recebeu a mesma protecao funcional dentro do runtime do browser; a duplicidade Node/browser ainda existe por restricao arquitetural atual e fica registrada como ponto de evolucao.
-- Os templates editaveis da extensao foram limitados ao texto do prompt enviado a LLM; nenhuma opcao do plugin altera as regras internas de anonimização.
-- `Prompt Documentacao` e `Prompt Diagnostico` agora possuem arquivos fisicos distintos de template e compartilham apenas a infraestrutura de registro/renderizacao.
-
-### Riscos conhecidos
-
-- Ainda existe duplicidade de regras de mascaramento entre o runtime Node e o runtime da extensao Chrome. O comportamento foi alinhado nesta etapa, mas o ponto unico cross-runtime ainda nao existe.
-- O plugin continua dependendo de permissao local explicita do navegador para ler diretórios do ERP/mobile. Os valores do `.env` deixam a configuracao visivel e sincronizada, mas nao concedem acesso ao filesystem por si só.
-
-### Limitacoes atuais
-
-- Nao existe um pacote/shared module unico reutilizado ao mesmo tempo por Node e pela extensao sem build adicional.
-- O template de diagnostico do CLI ainda esta acoplado ao `src/diagnostics.js`.
-- O template diagnostico da extensao espelha o contrato do CLI, mas ainda nao e gerado automaticamente a partir de `src/diagnostics.js`.
-
-### Pendencias
-
-- Avaliar se o plugin deve incorporar includes locais do ERP no rankeamento, como o CLI ja faz.
-- Decidir se a montagem final do prompt deve ser totalmente centralizada no service worker tambem para `Prompt Documentacao`.
+- Ainda existe duplicidade de regras de mascaramento entre o runtime Node e o runtime da extensão Chrome. O comportamento está alinhado, mas um ponto único cross-runtime ainda não existe.
+- O plugin depende de permissão local explícita do navegador para ler diretórios do ERP/mobile. Os valores do `.env` deixam a configuração visível e sincronizada, mas não concedem acesso ao filesystem por si só.
+- O template de diagnóstico da extensão espelha o contrato do CLI, mas não é gerado automaticamente a partir de `src/diagnostics.js`.
 
 ### Como validar
 
@@ -110,29 +48,19 @@ npm run build:extension
 npm test
 ```
 
-### Como retomar o trabalho
+### Arquivos mais relevantes
 
-- Ler primeiro esta secao `Evolucao em andamento`.
-- Revisar a secao da extensao Chrome, especialmente o fluxo de `Prompt Diagnostico + Contexto Fontes`, antes de mexer novamente em `background.js`, `popup.js` ou `local-workspace.js`.
-- Se houver regressao no prompt com fontes, validar primeiro se existem permissões locais ativas para ERP/mobile nas options do plugin.
-
-### Arquivos mais relevantes para continuidade
-
-- `README.md`
-- `src/sensitiveTextSanitizer.js`
-- `src/anonymizer.js`
-- `src/diagnostics.js`
-- `src/index.js`
-- `tests/diagnosticsPromptContracts.test.js`
-- `chrome-extension/shield-core.js`
-- `chrome-extension/background.js`
-- `chrome-extension/prompt-templates.js`
-- `chrome-extension/prompt-template-diagnostic.js`
-- `chrome-extension/popup.js`
-- `chrome-extension/options.js`
-- `tests/sensitiveTextSanitizer.test.js`
-- `tests/anonymizer.test.js`
-- `tests/promptTemplates.test.js`
+- `src/sensitiveTextSanitizer.js` — ponto único de mascaramento textual
+- `src/anonymizer.js` — orquestrador das 2 fases de anonimização
+- `src/diagnostics.js` — diagnóstico com LLM (CLI)
+- `src/index.js` — CLI principal de exportação
+- `chrome-extension/shield-core.js` — núcleo da extensão Chrome
+- `chrome-extension/background.js` — service worker da extensão
+- `chrome-extension/prompt-templates.js` — templates do Prompt Documentação
+- `chrome-extension/prompt-template-diagnostic.js` — templates do Prompt Diagnóstico
+- `chrome-extension/popup.js` — interface principal do popup
+- `chrome-extension/options.js` — configurações da extensão
+- `tests/` — testes automatizados (sanitizador, anonimizador, templates, contratos de prompt)
 
 ---
 

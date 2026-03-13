@@ -385,6 +385,7 @@ function renderHistory(entries) {
 }
 
 async function loadDashboard(options = {}) {
+  hideSourcePreview();
   const response = await sendMessage({ type: 'getDashboardData' });
   if (!response.ok) {
     setStatus(response.error || 'Nao foi possivel carregar a extensao.', 'error');
@@ -643,7 +644,22 @@ function renderSourcePreview(workspace) {
   const frontendStatus = workspace && workspace.frontendStatus;
 
   const totalFiles = backendFiles.length + frontendFiles.length;
-  badge.textContent = totalFiles === 0 ? 'Nenhum arquivo' : `${totalFiles} arquivo(s)`;
+
+  if (totalFiles === 0) {
+    panel.hidden = true;
+    body.innerHTML = '';
+    badge.textContent = '';
+    const naoConfigurado = (!backendStatus || !backendStatus.configured) && (!frontendStatus || !frontendStatus.configured);
+    setStatus(
+      naoConfigurado
+        ? 'Nenhum diretório de workspace configurado. Configure os caminhos em Configurar antes de usar esta opção.'
+        : 'Nenhum trecho relevante encontrado nos fontes locais para esta issue.',
+      'warn'
+    );
+    return;
+  }
+
+  badge.textContent = `${totalFiles} arquivo(s)`;
 
   warnings.forEach((warning) => {
     const el = document.createElement('div');
@@ -701,15 +717,6 @@ function renderSourcePreview(workspace) {
         frontendFiles.forEach((f) => body.appendChild(buildSourceFileCard(f, 'frontend')));
       }
     }
-  }
-
-  if (totalFiles === 0 && warnings.length === 0
-      && (!backendStatus || !backendStatus.configured)
-      && (!frontendStatus || !frontendStatus.configured)) {
-    const empty = document.createElement('div');
-    empty.className = 'source-preview-empty';
-    empty.textContent = 'Nenhum trecho local encontrado. Configure os diretórios de workspace em Configurar.';
-    body.appendChild(empty);
   }
 
   panel.hidden = false;

@@ -743,11 +743,23 @@ async function exportSingleIssue(issueKey, mode, settings) {
     if (!zendeskData) zendeskData = await fetchZendeskViaTab(issueKey, settings);
   }
 
+  const { anonIssue, summary } = SHIELD.core.anonymizeIssue(issue, zendeskData);
+  const issueForContext = {
+    ...anonIssue,
+    fields: {
+      ...anonIssue.fields,
+      components: (issue.fields || {}).components,
+      labels: (issue.fields || {}).labels,
+      attachment: (issue.fields || {}).attachment,
+    },
+  };
+  const zdForContext = anonIssue.fields.zdComments
+    ? { comments: anonIssue.fields.zdComments }
+    : zendeskData;
   const technicalContext = SHIELD.issueTechnicalContext
-    ? SHIELD.issueTechnicalContext.extractIssueTechnicalContext(issue, zendeskData)
+    ? SHIELD.issueTechnicalContext.extractIssueTechnicalContext(issueForContext, zdForContext)
     : null;
   const safeTechnicalContext = SHIELD.core.sanitizeStructuredData(technicalContext);
-  const { anonIssue, summary } = SHIELD.core.anonymizeIssue(issue, zendeskData);
   anonIssue.technicalContext = safeTechnicalContext;
   anonIssue.fields = { ...(anonIssue.fields || {}), technicalContext: safeTechnicalContext };
   const metadata = buildMetadata(issueKey, issue, zendeskData, settings, technicalContext);
@@ -866,11 +878,23 @@ async function handleGenerateAIDoc(message) {
         }
       }
 
+      const { anonIssue } = SHIELD.core.anonymizeIssue(issue, zendeskData);
+      const issueForContext = {
+        ...anonIssue,
+        fields: {
+          ...anonIssue.fields,
+          components: (issue.fields || {}).components,
+          labels: (issue.fields || {}).labels,
+          attachment: (issue.fields || {}).attachment,
+        },
+      };
+      const zdForContext = anonIssue.fields.zdComments
+        ? { comments: anonIssue.fields.zdComments }
+        : zendeskData;
       const technicalContext = SHIELD.issueTechnicalContext
-        ? SHIELD.issueTechnicalContext.extractIssueTechnicalContext(issue, zendeskData)
+        ? SHIELD.issueTechnicalContext.extractIssueTechnicalContext(issueForContext, zdForContext)
         : null;
       const safeTechnicalContext = SHIELD.core.sanitizeStructuredData(technicalContext);
-      const { anonIssue } = SHIELD.core.anonymizeIssue(issue, zendeskData);
       anonIssue.technicalContext = safeTechnicalContext;
       anonIssue.fields = { ...(anonIssue.fields || {}), technicalContext: safeTechnicalContext };
       const anonymizedText = buildAnonymizedPromptText(anonIssue);

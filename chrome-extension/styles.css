@@ -477,6 +477,10 @@ button:disabled,
   gap: 10px;
 }
 
+.source-preview[hidden] {
+  display: none;
+}
+
 .source-preview-header {
   display: flex;
   align-items: center;

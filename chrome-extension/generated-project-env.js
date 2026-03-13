@@ -4,7 +4,7 @@
 
   root.generatedProjectEnv = {
   "source": ".env (snapshot gerado no build da extensao)",
-  "generatedAt": "2026-03-13T10:38:51.184Z",
+  "generatedAt": "2026-03-13T13:18:43.512Z",
   "projectRootDir": "C:/Users/brunno.costa/Documents/lgpd-export-standalone",
   "values": {
     "WORKSPACE_ERP_BACKEND_DIR": "C:/Users/brunno.costa/Documents/Fontes_Protheus/TFSAzure/Fontes_Doc/Master/Fontes",
