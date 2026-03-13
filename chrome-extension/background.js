@@ -11,6 +11,7 @@ const DEFAULTS = {
   zendeskJiraField: 'customfield_11086',
   downloadFolder: 'shield',
   aiProvider: 'claude',
+  aiAction: 'copy-and-open',
 };
 
 function delay(ms) {
@@ -133,12 +134,29 @@ function getZendeskMode(settings) {
   return 'proxy-tab';
 }
 
+function getAIProviderLabel(provider) {
+  const labels = {
+    claude: 'Claude.ai',
+    chatgpt: 'ChatGPT',
+    gemini: 'Gemini',
+    copilot: 'Copilot',
+  };
+  return labels[provider] || 'Claude.ai';
+}
+
+function getAIActionLabel(action) {
+  return action === 'copy-only' ? 'Somente copiar prompt' : 'Copiar prompt e abrir IA';
+}
+
 function buildCapabilities(settings) {
   const capabilities = [
     'PDF anonimizado da issue',
     'metadata JSON para o diagnostics.js',
     'fila de multiplas issue keys',
     'historico local das exportacoes',
+    settings.aiAction === 'copy-only'
+      ? 'prompt de IA copiado para a area de transferencia'
+      : 'prompt de IA copiado com abertura automatica da IA favorita',
   ];
 
   if (settings.zendeskBaseUrl && settings.zendeskUser && settings.zendeskToken) {
@@ -498,6 +516,84 @@ function buildAnonymizedText(anonIssue) {
   return lines.join('\n');
 }
 
+function buildAnonymizedPromptText(anonIssue) {
+  const f = anonIssue.fields || {};
+  const jiraComments = (f.comment && f.comment.comments) || [];
+  const zendeskComments = f.zdComments || [];
+  const lines = [];
+  const history = [];
+
+  function formatDate(value) {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return String(value);
+    }
+    return parsed.toLocaleString('pt-BR');
+  }
+
+  function pushHistoryItem(source, comment, index) {
+    const body = String((comment && comment.body) || '').trim();
+    if (!body) return;
+
+    const rawDate = source === 'Zendesk' ? comment.created_at : comment.created;
+    const parsed = rawDate ? Date.parse(rawDate) : Number.NaN;
+
+    history.push({
+      order: index,
+      sortValue: Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed,
+      source,
+      author: (comment && comment.author && comment.author.displayName) || '[PESSOA]',
+      date: formatDate(rawDate),
+      visibility: source === 'Zendesk'
+        ? (comment.public === false ? 'Interno' : 'Publico')
+        : null,
+      body,
+    });
+  }
+
+  if (f.summary) lines.push(`RESUMO: ${f.summary}`);
+  if (f.status && f.status.name) lines.push(`STATUS: ${f.status.name}`);
+  if (f.priority && f.priority.name) lines.push(`PRIORIDADE: ${f.priority.name}`);
+  if (f.issuetype && f.issuetype.name) lines.push(`TIPO: ${f.issuetype.name}`);
+
+  if (f.description) {
+    lines.push('');
+    lines.push('DESCRICAO:');
+    lines.push(f.description);
+  }
+
+  if (f.zdContact) {
+    lines.push('');
+    lines.push('CONTATO ZENDESK ANONIMIZADO:');
+    if (f.zdContact.nome) lines.push(`Nome: ${f.zdContact.nome}`);
+    if (f.zdContact.email) lines.push(`Email: ${f.zdContact.email}`);
+    if (f.zdContact.fone) lines.push(`Telefone: ${f.zdContact.fone}`);
+  }
+
+  jiraComments.forEach((comment, index) => pushHistoryItem('Jira', comment, index));
+  zendeskComments.forEach((comment, index) => pushHistoryItem('Zendesk', comment, jiraComments.length + index));
+
+  if (history.length) {
+    history.sort((a, b) => {
+      if (a.sortValue !== b.sortValue) return a.sortValue - b.sortValue;
+      return a.order - b.order;
+    });
+
+    lines.push('');
+    lines.push(`HISTORICO COMPLETO DA ISSUE (${history.length} itens):`);
+    history.forEach((item, index) => {
+      const header = [`Item ${index + 1}`, item.source, item.author];
+      if (item.visibility) header.push(item.visibility);
+      if (item.date) header.push(item.date);
+      lines.push(`--- ${header.join(' | ')} ---`);
+      lines.push(item.body);
+    });
+  }
+
+  return lines.join('\n');
+}
+
 async function exportSingleIssue(issueKey, mode, settings) {
   const issue = await fetchIssue(issueKey, settings);
   const zdField = settings.zendeskJiraField || 'customfield_11086';
@@ -512,7 +608,7 @@ async function exportSingleIssue(issueKey, mode, settings) {
 
   const { anonIssue, summary } = SHIELD.core.anonymizeIssue(issue, zendeskData);
   const pdfBuffer = SHIELD.pdf.generatePDF(anonIssue);
-  const anonymizedText = buildAnonymizedText(anonIssue);
+  const anonymizedText = buildAnonymizedPromptText(anonIssue);
   const metadata = buildMetadata(issueKey, issue, settings);
   const folder = normalizeDownloadFolder(settings.downloadFolder);
   const pdfFilename = `${issueKey}_LGPD_anonimizado.pdf`;
@@ -621,7 +717,7 @@ async function handleGenerateAIDoc(message) {
       }
 
       const { anonIssue } = SHIELD.core.anonymizeIssue(issue, zendeskData);
-      const anonymizedText = buildAnonymizedText(anonIssue);
+      const anonymizedText = buildAnonymizedPromptText(anonIssue);
 
       results.push({
         ok: true,
@@ -706,6 +802,9 @@ async function getSettingsSummary() {
     downloadFolder: normalizeDownloadFolder(settings.downloadFolder),
     capabilities: buildCapabilities(settings),
     aiProvider: settings.aiProvider || 'claude',
+    aiProviderLabel: getAIProviderLabel(settings.aiProvider),
+    aiAction: settings.aiAction || 'copy-and-open',
+    aiActionLabel: getAIActionLabel(settings.aiAction),
   };
 }
 

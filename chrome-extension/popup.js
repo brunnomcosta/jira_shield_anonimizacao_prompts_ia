@@ -12,6 +12,32 @@ const state = {
   exportResults: [],
 };
 
+function getAIProviderLabel(value) {
+  const labels = {
+    claude: 'Claude.ai',
+    chatgpt: 'ChatGPT',
+    gemini: 'Gemini',
+    copilot: 'Copilot',
+  };
+  return labels[value] || 'Claude.ai';
+}
+
+function getAIActionLabel(value) {
+  return value === 'copy-only' ? 'Somente copiar prompt' : 'Copiar prompt e abrir IA';
+}
+
+function getAIActionButtonLabel() {
+  const action = (state.settings && state.settings.aiAction) || 'copy-and-open';
+  return action === 'copy-only' ? 'Copiar Prompt da IA' : 'Gerar Documentacao com IA';
+}
+
+function syncAIActionButtonLabels() {
+  const label = getAIActionButtonLabel();
+  document.querySelectorAll('.analyze-ai-btn').forEach((node) => {
+    node.textContent = label;
+  });
+}
+
 function sendMessage(payload) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(payload, (response) => {
@@ -114,6 +140,12 @@ function renderSettingsSummary(summary) {
       copy: 'PDF anonimizado + metadata JSON',
       tone: '',
     },
+    {
+      label: 'IA',
+      value: summary.aiProviderLabel || getAIProviderLabel(summary.aiProvider),
+      copy: summary.aiActionLabel || getAIActionLabel(summary.aiAction),
+      tone: '',
+    },
   ];
 
   node.innerHTML = cards.map((card) => `
@@ -197,6 +229,11 @@ ${item.anonymizedText || '(conteúdo não disponível)'}
 async function analyzeWithAI(item) {
   const prompt = buildAIPrompt(item);
   await navigator.clipboard.writeText(prompt);
+  const action = (state.settings && state.settings.aiAction) || 'copy-and-open';
+  if (action === 'copy-only') {
+    setStatus('Prompt copiado para a area de transferencia. Abra sua IA favorita e cole com Ctrl+V.', '');
+    return;
+  }
   const provider = (state.settings && state.settings.aiProvider) || 'claude';
   const url = AI_URLS[provider] || AI_URLS.claude;
   chrome.tabs.create({ url });
@@ -224,6 +261,7 @@ function renderResults(response) {
     card.className = `result-card${item.ok ? '' : ' error'}`;
 
     if (item.ok) {
+      const aiButtonLabel = getAIActionButtonLabel();
       const aiButton = item.ticketId
         ? `<div class="result-actions"><button class="ghost analyze-ai-btn" data-index="${index}" type="button">Gerar Documentação com IA</button></div>`
         : '';
@@ -255,6 +293,8 @@ function renderResults(response) {
 
     list.appendChild(card);
   });
+
+  syncAIActionButtonLabels();
 }
 
 function renderHistory(entries) {
@@ -382,6 +422,7 @@ function renderAIDocResults(response) {
     card.className = `result-card${item.ok ? '' : ' error'}`;
 
     if (item.ok) {
+      const aiButtonLabel = getAIActionButtonLabel();
       card.innerHTML = `
         <div class="row result-head">
           <strong>${escapeHtml(item.issueKey)}</strong>
@@ -404,6 +445,8 @@ function renderAIDocResults(response) {
 
     list.appendChild(card);
   });
+
+  syncAIActionButtonLabels();
 }
 
 async function runGenerateDoc() {
@@ -442,8 +485,13 @@ async function runGenerateDoc() {
     if (successful.length === 1) {
       await analyzeWithAI(successful[0]);
     } else if (successful.length > 1) {
+      const action = (state.settings && state.settings.aiAction) || 'copy-and-open';
+      const actionText = action === 'copy-only'
+        ? 'Clique em "Copiar Prompt da IA" em cada uma.'
+        : 'Clique em "Gerar Documentacao com IA" em cada uma.';
       setStatus(`${successful.length} issues prontas. Clique em "Gerar Documentação com IA" em cada uma.`, '');
       renderAIDocResults(response);
+      setStatus(`${successful.length} issues prontas. ${actionText}`, '');
     } else {
       setStatus('Nenhuma issue processada com sucesso.', 'error');
       renderAIDocResults(response);

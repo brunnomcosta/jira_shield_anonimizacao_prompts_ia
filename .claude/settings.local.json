@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(for url:*)",
+      "Bash(do echo:*)"
+    ]
+  }
+}

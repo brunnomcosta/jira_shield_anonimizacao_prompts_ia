@@ -9,6 +9,7 @@ const DEFAULTS = {
   zendeskJiraField: 'customfield_11086',
   downloadFolder: 'shield',
   aiProvider: 'claude',
+  aiAction: 'copy-and-open',
 };
 
 function setStatus(message, variant) {
@@ -43,6 +44,20 @@ function normalizeFolder(value) {
   return String(value || 'shield').trim().replace(/^\/+|\/+$/g, '') || 'shield';
 }
 
+function getAIProviderLabel(value) {
+  const labels = {
+    claude: 'Claude.ai',
+    chatgpt: 'ChatGPT',
+    gemini: 'Gemini',
+    copilot: 'Copilot',
+  };
+  return labels[value] || 'Claude.ai';
+}
+
+function getAIActionLabel(value) {
+  return value === 'copy-only' ? 'Somente copiar o prompt' : 'Copiar e abrir a IA';
+}
+
 function readForm() {
   return {
     jiraBaseUrl: normalizeUrl(document.getElementById('jiraBaseUrl').value),
@@ -55,6 +70,7 @@ function readForm() {
     zendeskJiraField: document.getElementById('zendeskJiraField').value.trim() || 'customfield_11086',
     downloadFolder: normalizeFolder(document.getElementById('downloadFolder').value),
     aiProvider: (document.querySelector('input[name="aiProvider"]:checked') || {}).value || 'claude',
+    aiAction: (document.querySelector('input[name="aiAction"]:checked') || {}).value || 'copy-and-open',
   };
 }
 
@@ -71,6 +87,9 @@ function fillForm(data) {
   const aiProviderVal = data.aiProvider || 'claude';
   const aiRadio = document.querySelector(`input[name="aiProvider"][value="${aiProviderVal}"]`);
   if (aiRadio) aiRadio.checked = true;
+  const aiActionVal = data.aiAction || 'copy-and-open';
+  const aiActionRadio = document.querySelector(`input[name="aiAction"][value="${aiActionVal}"]`);
+  if (aiActionRadio) aiActionRadio.checked = true;
 }
 
 function isValidHttpUrl(value) {
@@ -112,6 +131,12 @@ function renderStrategySummary(payload) {
       label: 'Downloads',
       value: `Downloads/${payload.downloadFolder || 'shield'}`,
       copy: 'PDF anonimizado e metadata JSON',
+      tone: '',
+    },
+    {
+      label: 'IA',
+      value: getAIProviderLabel(payload.aiProvider),
+      copy: getAIActionLabel(payload.aiAction),
       tone: '',
     },
   ];

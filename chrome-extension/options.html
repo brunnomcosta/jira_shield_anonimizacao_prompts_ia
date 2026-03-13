@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>JIRA SHIELD LGPD Export — Options</title>
+    <title>JIRA SHIELD LGPD Export - Options</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -11,7 +11,7 @@
       <header class="hero hero-wide">
         <div>
           <h1 class="brand">SHIELD</h1>
-          <p class="subtitle">Configuração da extensão Chrome para exportação LGPD do Jira.</p>
+          <p class="subtitle">Configuracao da extensao Chrome para exportacao LGPD do Jira.</p>
         </div>
         <span class="hero-badge">Options</span>
       </header>
@@ -20,7 +20,7 @@
         <div class="row panel-head">
           <div>
             <h2 class="section-title">Resumo operacional</h2>
-            <p class="section-copy">A extensão cobre o módulo de exportação e gera os arquivos de entrada do diagnostics.js.</p>
+            <p class="section-copy">A extensao cobre o modulo de exportacao e gera os arquivos de entrada do diagnostics.js.</p>
           </div>
         </div>
         <div id="strategy-summary" class="summary-grid"></div>
@@ -29,7 +29,7 @@
           <span class="pill">metadata JSON</span>
           <span class="pill">proxy Jira</span>
           <span class="pill">API Zendesk opcional</span>
-          <span class="pill">histórico local</span>
+          <span class="pill">historico local</span>
         </div>
       </section>
 
@@ -37,7 +37,7 @@
         <div class="row panel-head">
           <div>
             <h2 class="section-title">Jira</h2>
-            <p class="section-copy">Obrigatório. Sem JIRA_BASE_URL a extensão não consegue ler a issue.</p>
+            <p class="section-copy">Obrigatorio. Sem JIRA_BASE_URL a extensao nao consegue ler a issue.</p>
           </div>
         </div>
 
@@ -59,8 +59,8 @@
       <section class="panel stack">
         <div class="row panel-head">
           <div>
-            <h2 class="section-title">Autenticação Jira</h2>
-            <p class="section-copy">Prioridade: token pessoal, depois usuário/senha, depois sessão já aberta no navegador.</p>
+            <h2 class="section-title">Autenticacao Jira</h2>
+            <p class="section-copy">Prioridade: token pessoal, depois usuario/senha, depois sessao ja aberta no navegador.</p>
           </div>
         </div>
 
@@ -95,7 +95,7 @@
         <div class="row panel-head">
           <div>
             <h2 class="section-title">Zendesk</h2>
-            <p class="section-copy">Opcional. Se não preencher, a extensão tenta o proxy Jira e depois a aba Zendesk da issue.</p>
+            <p class="section-copy">Opcional. Se nao preencher, a extensao tenta o proxy Jira e depois a aba Zendesk da issue.</p>
           </div>
         </div>
 
@@ -120,7 +120,7 @@
           <div class="field">
             <label>Escopo</label>
             <div class="note-box">
-              O diagnóstico com LLM, leitura de workspace local e análise ERP/mobile continuam no CLI Node.js.
+              O diagnostico com LLM, leitura de workspace local e analise ERP/mobile continuam no CLI Node.js.
             </div>
           </div>
         </div>
@@ -129,8 +129,8 @@
       <section class="panel stack">
         <div class="row panel-head">
           <div>
-            <h2 class="section-title">IA para geração de documentação</h2>
-            <p class="section-copy">Após exportar uma issue com ticket Zendesk vinculado, um botão abrirá a IA escolhida para gerar um Documento Técnico TOTVS (DT).</p>
+            <h2 class="section-title">IA para geracao de documentacao</h2>
+            <p class="section-copy">Defina a IA preferida e o comportamento do botao: apenas copiar o prompt para a memoria ou copiar e abrir a URL da IA favorita.</p>
           </div>
         </div>
         <div class="field">
@@ -139,22 +139,37 @@
             <label class="mode-card">
               <input type="radio" name="aiProvider" value="claude">
               <span class="mode-title">Claude.ai</span>
-              <span class="mode-copy">claude.ai — Gratuito, ótima compreensão em português</span>
+              <span class="mode-copy">claude.ai - Gratuito, otima compreensao em portugues</span>
             </label>
             <label class="mode-card">
               <input type="radio" name="aiProvider" value="chatgpt">
               <span class="mode-title">ChatGPT</span>
-              <span class="mode-copy">chat.openai.com — GPT-4o Mini gratuito</span>
+              <span class="mode-copy">chat.openai.com - GPT-4o Mini gratuito</span>
             </label>
             <label class="mode-card">
               <input type="radio" name="aiProvider" value="gemini">
               <span class="mode-title">Gemini</span>
-              <span class="mode-copy">gemini.google.com — Gratuito do Google</span>
+              <span class="mode-copy">gemini.google.com - Gratuito do Google</span>
             </label>
             <label class="mode-card">
               <input type="radio" name="aiProvider" value="copilot">
               <span class="mode-title">Copilot</span>
-              <span class="mode-copy">copilot.microsoft.com — Gratuito da Microsoft</span>
+              <span class="mode-copy">copilot.microsoft.com - Gratuito da Microsoft</span>
+            </label>
+          </div>
+        </div>
+        <div class="field">
+          <div class="legend">Acao ao gerar documentacao</div>
+          <div class="mode-grid">
+            <label class="mode-card">
+              <input type="radio" name="aiAction" value="copy-and-open">
+              <span class="mode-title">Copiar e abrir IA</span>
+              <span class="mode-copy">Copia o prompt para a area de transferencia e abre a URL da IA favorita em uma nova aba.</span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="aiAction" value="copy-only">
+              <span class="mode-title">Somente copiar</span>
+              <span class="mode-copy">Prepara o prompt e deixa a abertura da IA sob seu controle.</span>
             </label>
           </div>
         </div>
@@ -163,7 +178,7 @@
       <section class="panel stack">
         <div class="row actions">
           <button id="save" class="primary" type="button">Salvar</button>
-          <button id="reset" class="secondary" type="button">Restaurar padrão</button>
+          <button id="reset" class="secondary" type="button">Restaurar padrao</button>
         </div>
         <div id="status" class="status"></div>
       </section>
