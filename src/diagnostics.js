@@ -14,7 +14,7 @@
  */
 
 import { fileURLToPath } from 'url';
-import { dirname, resolve, join, basename } from 'path';
+import { dirname, resolve, join, basename, extname } from 'path';
 import dotenv from 'dotenv';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -38,10 +38,14 @@ const SRC_DIR    = resolve(__dirname);
 // Diretórios de workspace externos (back-end / front-end da aplicação)
 const WORKSPACE_BACKEND_DIR  = process.env.WORKSPACE_BACKEND_DIR  ? resolve(process.env.WORKSPACE_BACKEND_DIR)  : null;
 const WORKSPACE_FRONTEND_DIR = process.env.WORKSPACE_FRONTEND_DIR ? resolve(process.env.WORKSPACE_FRONTEND_DIR) : null;
+const WORKSPACE_INCLUDE_DIR  = process.env.WORKSPACE_INCLUDE_DIR  ? resolve(process.env.WORKSPACE_INCLUDE_DIR)  : null;
 
 // Extensões de arquivo aceitas para leitura do workspace
 const WORKSPACE_EXTENSIONS = (process.env.WORKSPACE_EXTENSIONS || 'js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp')
   .split(',').map(e => `.${e.trim().toLowerCase()}`);
+
+const INCLUDE_AWARE_EXTENSIONS = new Set(['.prx', '.prw', '.tlpp']);
+const WORKSPACE_INCLUDE_EXTENSIONS = ['.ch', '.h', '.hh', '.hpp', '.inc', '.tlpp', '.prw', '.prx'];
 
 // Diretórios ignorados no scan recursivo
 const IGNORE_DIRS = new Set([
@@ -360,20 +364,113 @@ function readSourceFiles() {
 /**
  * Caminha recursivamente em um diretório e retorna todos os arquivos-fonte.
  */
-function walkDir(dir, results = []) {
+function walkDir(dir, results = [], allowedExtensions = WORKSPACE_EXTENSIONS) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (!IGNORE_DIRS.has(entry.name)) walkDir(join(dir, entry.name), results);
-    } else if (entry.isFile() && WORKSPACE_EXTENSIONS.includes(
-      entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase()
-    )) {
-      results.push(join(dir, entry.name));
+      if (!IGNORE_DIRS.has(entry.name)) walkDir(join(dir, entry.name), results, allowedExtensions);
+    } else if (entry.isFile()) {
+      const entryExt = extname(entry.name).toLowerCase();
+      if (!allowedExtensions || allowedExtensions.includes(entryExt)) {
+        results.push(join(dir, entry.name));
+      }
     }
   }
   return results;
+}
+
+function normalizeLookupPath(value) {
+  return value.replace(/\\/g, '/').replace(/^\//, '').toLowerCase();
+}
+
+function buildIncludeIndex(dir) {
+  if (!dir || !fs.existsSync(dir)) return null;
+
+  const files = walkDir(dir, [], WORKSPACE_INCLUDE_EXTENSIONS);
+  const byRelative = new Map();
+  const byBasename = new Map();
+
+  for (const filePath of files) {
+    const rel = normalizeLookupPath(filePath.replace(dir, ''));
+    const base = basename(filePath).toLowerCase();
+    byRelative.set(rel, filePath);
+    if (!byBasename.has(base)) byBasename.set(base, []);
+    byBasename.get(base).push(filePath);
+  }
+
+  return {
+    rootDir: dir,
+    indexedFiles: files.length,
+    byRelative,
+    byBasename,
+    contentCache: new Map(),
+  };
+}
+
+function extractIncludeNames(content, maxLines = 80) {
+  const includes = [];
+  for (const line of content.split('\n').slice(0, maxLines)) {
+    const match = line.match(/^\s*#include\s*[<"]([^">]+)[">]/i);
+    if (match) includes.push(match[1].trim());
+  }
+  return [...new Set(includes)];
+}
+
+function resolveIncludeFile(includeName, includeIndex) {
+  if (!includeIndex || !includeName) return null;
+
+  const normalized = normalizeLookupPath(includeName);
+  const directMatch = includeIndex.byRelative.get(normalized);
+  if (directMatch) return directMatch;
+
+  const suffix = `/${normalized}`;
+  for (const [rel, filePath] of includeIndex.byRelative.entries()) {
+    if (rel.endsWith(suffix)) return filePath;
+  }
+
+  const byName = includeIndex.byBasename.get(basename(includeName).toLowerCase()) || [];
+  return byName[0] || null;
+}
+
+function getIncludeEntriesForFile(filePath, content, includeIndex, maxIncludes = 20, maxChars = 12000) {
+  if (!includeIndex || !INCLUDE_AWARE_EXTENSIONS.has(extname(filePath).toLowerCase())) {
+    return [];
+  }
+
+  const includeNames = extractIncludeNames(content).slice(0, maxIncludes);
+  const entries = [];
+  let consumedChars = 0;
+
+  for (const includeName of includeNames) {
+    const resolved = resolveIncludeFile(includeName, includeIndex);
+    if (!resolved) continue;
+
+    let includeContent = includeIndex.contentCache.get(resolved);
+    if (includeContent === undefined) {
+      try {
+        includeContent = fs.readFileSync(resolved, 'utf-8');
+      } catch {
+        includeContent = null;
+      }
+      includeIndex.contentCache.set(resolved, includeContent);
+    }
+    if (!includeContent) continue;
+
+    const remaining = maxChars - consumedChars;
+    if (remaining <= 0) break;
+
+    const rel = normalizeLookupPath(resolved.replace(includeIndex.rootDir, ''));
+    const clippedContent = includeContent.length > remaining
+      ? includeContent.slice(0, remaining)
+      : includeContent;
+
+    entries.push({ name: includeName, rel, content: clippedContent });
+    consumedChars += clippedContent.length;
+  }
+
+  return entries;
 }
 
 /**
@@ -436,8 +533,7 @@ function extractSearchTerms(text) {
  * Pontua a relevância de um arquivo pelo conteúdo usando regex nos termos extraídos.
  * Retorna { score, matchedLines } onde matchedLines é array de índices de linha com hit.
  */
-function scoreFileContent(content, terms) {
-  const lines = content.split('\n');
+function scoreTextLines(lines, terms, keepMatchedLines = true) {
   const matchedLines = [];
   let score = 0;
 
@@ -463,7 +559,33 @@ function scoreFileContent(content, terms) {
     }
   }
 
-  return { score, matchedLines: [...new Set(matchedLines)].sort((a, b) => a - b) };
+  return {
+    score,
+    matchedLines: keepMatchedLines
+      ? [...new Set(matchedLines)].sort((a, b) => a - b)
+      : [],
+  };
+}
+
+function scoreFileContent(content, terms, includeEntries = []) {
+  const baseScore = scoreTextLines(content.split('\n'), terms, true);
+  const includeHits = [];
+  let includeScore = 0;
+
+  for (const entry of includeEntries) {
+    const includeResult = scoreTextLines(entry.content.split('\n'), terms, false);
+    includeScore += includeResult.score;
+    if (includeResult.score > 0) {
+      includeHits.push({ ref: entry.rel, score: includeResult.score });
+    }
+  }
+
+  return {
+    score: baseScore.score + includeScore,
+    matchedLines: baseScore.matchedLines,
+    includeScore,
+    includeHits,
+  };
 }
 
 /**
@@ -543,12 +665,19 @@ function extractSnippets(content, matchedLines, ctx = 10, maxSnippets = 5, maxCh
 function readWorkspaceFiles(pdfText) {
   const terms  = extractSearchTerms(pdfText);
   const result = { backend: [], frontend: [], configured: false, terms };
+  const includeIndex = buildIncludeIndex(WORKSPACE_INCLUDE_DIR);
 
   const MAX_CANDIDATES  = 80;   // candidatos lidos no passe 2 (pré-filtro por path)
   const MAX_FILES       = 15;   // arquivos incluídos no contexto final
   const MAX_TOTAL_CHARS = 22000; // limite total de chars por workspace
 
   const allTermsFlat = [...terms.identifiers, ...terms.words];
+
+  if (includeIndex) {
+    console.log(
+      `   ${c.gray}-> Includes: ${includeIndex.indexedFiles} arquivo(s) indexados em ${WORKSPACE_INCLUDE_DIR}${c.reset}`
+    );
+  }
 
   function loadDir(dir, label) {
     if (!dir || !fs.existsSync(dir)) return [];
@@ -569,9 +698,22 @@ function readWorkspaceFiles(pdfText) {
     for (const { path: fp, pathScore } of candidates) {
       try {
         const content = fs.readFileSync(fp, 'utf-8');
-        const { score: contentScore, matchedLines } = scoreFileContent(content, terms);
-        scored.push({ path: fp, content, pathScore, contentScore, matchedLines,
-                      total: pathScore * 2 + contentScore });
+        const includeEntries = getIncludeEntriesForFile(fp, content, includeIndex);
+        const { score: contentScore, matchedLines, includeScore, includeHits } = scoreFileContent(
+          content,
+          terms,
+          includeEntries
+        );
+        scored.push({
+          path: fp,
+          content,
+          pathScore,
+          contentScore,
+          matchedLines,
+          includeScore,
+          includeHits,
+          total: pathScore * 2 + contentScore,
+        });
       } catch { /* ignora arquivos ilegíveis */ }
     }
     scored.sort((a, b) => b.total - a.total);
@@ -581,7 +723,7 @@ function readWorkspaceFiles(pdfText) {
     let totalChars = 0;
     const loaded = [];
 
-    for (const { path: fp, content, pathScore, contentScore, matchedLines, total } of picked) {
+    for (const { path: fp, content, pathScore, contentScore, matchedLines, includeScore, includeHits, total } of picked) {
       if (totalChars >= MAX_TOTAL_CHARS) break;
       const snippet = extractSnippets(content, matchedLines);
       totalChars += snippet.text.length;
@@ -594,6 +736,8 @@ function readWorkspaceFiles(pdfText) {
         score: total,
         pathScore,
         contentScore,
+        includeScore,
+        includeHits: includeHits.map((hit) => hit.ref),
       });
     }
 
@@ -1357,6 +1501,14 @@ function getConfigurationGaps() {
       label: 'Workspace Front-end',
       env: `WORKSPACE_FRONTEND_DIR=${WORKSPACE_FRONTEND_DIR}`,
       impact: 'O diretório configurado não existe. Nenhum fonte local de front-end será considerado na análise.',
+    });
+  }
+
+  if (WORKSPACE_INCLUDE_DIR && !fs.existsSync(WORKSPACE_INCLUDE_DIR)) {
+    gaps.push({
+      label: 'Workspace Includes',
+      env: `WORKSPACE_INCLUDE_DIR=${WORKSPACE_INCLUDE_DIR}`,
+      impact: 'O diretorio de includes configurado nao existe. Fontes .prw/.prx/.tlpp nao serao enriquecidos com STR e mensagens vindas de .ch.',
     });
   }
 

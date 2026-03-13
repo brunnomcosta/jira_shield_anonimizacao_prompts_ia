@@ -123,7 +123,10 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 | `LLM_PROVIDER_ORDER` | Ordem de tentativa dos provedores LLM (ex: `codex,claude,copilot,anthropic`) |
 | `WORKSPACE_BACKEND_DIR` | Raiz do código-fonte back-end para análise cruzada de causa raiz |
 | `WORKSPACE_FRONTEND_DIR` | Raiz do código-fonte front-end para análise cruzada de causa raiz |
+| `WORKSPACE_INCLUDE_DIR` | Raiz dos includes usados por fontes `.prw/.prx/.tlpp`; o diagnóstico usa `.ch` referenciados via `#include` para enriquecer a correlação por conteúdo |
 | `WORKSPACE_EXTENSIONS` | Extensões de arquivo a incluir (padrão: `js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp`) |
+
+Quando `WORKSPACE_INCLUDE_DIR` está configurado, arquivos `.prw`, `.prx` e `.tlpp` passam a considerar o conteúdo dos `.ch` incluídos no cabeçalho apenas para melhorar o rankeamento por conteúdo. O trecho enviado ao LLM continua sendo do fonte principal.
 
 ---
 
