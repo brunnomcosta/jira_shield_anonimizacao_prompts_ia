@@ -59,76 +59,6 @@
       <section class="panel stack">
         <div class="row panel-head">
           <div>
-            <h2 class="section-title">Autenticacao Jira</h2>
-            <p class="section-copy">Prioridade: token pessoal, depois usuario/senha, depois sessao ja aberta no navegador.</p>
-          </div>
-        </div>
-
-        <div class="grid cols-2">
-          <div class="field">
-            <label for="jiraToken">JIRA_TOKEN</label>
-            <input id="jiraToken" type="password" placeholder="Opcional">
-            <div class="hint">Recomendado para Jira 8.14+.</div>
-          </div>
-
-          <div class="field">
-            <label for="downloadFolder">Pasta de download</label>
-            <input id="downloadFolder" type="text" placeholder="shield">
-            <div class="hint">Subpasta relativa dentro de Downloads.</div>
-          </div>
-        </div>
-
-        <div class="grid cols-2">
-          <div class="field">
-            <label for="jiraUser">JIRA_USER</label>
-            <input id="jiraUser" type="text" placeholder="Opcional">
-          </div>
-
-          <div class="field">
-            <label for="jiraPassword">JIRA_PASSWORD</label>
-            <input id="jiraPassword" type="password" placeholder="Opcional">
-          </div>
-        </div>
-      </section>
-
-      <section class="panel stack">
-        <div class="row panel-head">
-          <div>
-            <h2 class="section-title">Zendesk</h2>
-            <p class="section-copy">Opcional. Se nao preencher, a extensao tenta o proxy Jira e depois a aba Zendesk da issue.</p>
-          </div>
-        </div>
-
-        <div class="grid cols-2">
-          <div class="field">
-            <label for="zendeskBaseUrl">ZENDESK_BASE_URL</label>
-            <input id="zendeskBaseUrl" type="url" placeholder="https://empresa.zendesk.com">
-          </div>
-
-          <div class="field">
-            <label for="zendeskUser">ZENDESK_USER</label>
-            <input id="zendeskUser" type="email" placeholder="agente@empresa.com">
-          </div>
-        </div>
-
-        <div class="grid cols-2">
-          <div class="field">
-            <label for="zendeskToken">ZENDESK_TOKEN</label>
-            <input id="zendeskToken" type="password" placeholder="Opcional">
-          </div>
-
-          <div class="field">
-            <label>Escopo</label>
-            <div class="note-box">
-              O diagnostico com LLM, leitura de workspace local e analise ERP/mobile continuam no CLI Node.js.
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel stack">
-        <div class="row panel-head">
-          <div>
             <h2 class="section-title">Workspace local para Prompt Diagnostico</h2>
             <p class="section-copy">Opcional. O plugin pode anexar trechos de fontes locais ao Prompt Diagnostico quando o navegador tiver permissao de leitura.</p>
           </div>
@@ -271,6 +201,76 @@
           <label for="promptTemplatePreview">Template final consolidado</label>
           <textarea id="promptTemplatePreview" class="template-editor template-preview" readonly></textarea>
           <div id="promptTemplateHint" class="hint">Os placeholders da issue sao preservados neste preview e sao resolvidos apenas na hora de gerar o prompt.</div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Autenticacao Jira</h2>
+            <p class="section-copy">Prioridade: token pessoal, depois usuario/senha, depois sessao ja aberta no navegador.</p>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="jiraToken">JIRA_TOKEN</label>
+            <input id="jiraToken" type="password" placeholder="Opcional">
+            <div class="hint">Recomendado para Jira 8.14+.</div>
+          </div>
+
+          <div class="field">
+            <label for="downloadFolder">Pasta de download</label>
+            <input id="downloadFolder" type="text" placeholder="shield">
+            <div class="hint">Subpasta relativa dentro de Downloads.</div>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="jiraUser">JIRA_USER</label>
+            <input id="jiraUser" type="text" placeholder="Opcional">
+          </div>
+
+          <div class="field">
+            <label for="jiraPassword">JIRA_PASSWORD</label>
+            <input id="jiraPassword" type="password" placeholder="Opcional">
+          </div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Zendesk</h2>
+            <p class="section-copy">Opcional. Se nao preencher, a extensao tenta o proxy Jira e depois a aba Zendesk da issue.</p>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="zendeskBaseUrl">ZENDESK_BASE_URL</label>
+            <input id="zendeskBaseUrl" type="url" placeholder="https://empresa.zendesk.com">
+          </div>
+
+          <div class="field">
+            <label for="zendeskUser">ZENDESK_USER</label>
+            <input id="zendeskUser" type="email" placeholder="agente@empresa.com">
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="zendeskToken">ZENDESK_TOKEN</label>
+            <input id="zendeskToken" type="password" placeholder="Opcional">
+          </div>
+
+          <div class="field">
+            <label>Escopo</label>
+            <div class="note-box">
+              O diagnostico com LLM, leitura de workspace local e analise ERP/mobile continuam no CLI Node.js.
+            </div>
+          </div>
         </div>
       </section>
 
