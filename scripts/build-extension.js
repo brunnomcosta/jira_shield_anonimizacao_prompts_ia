@@ -245,6 +245,16 @@ async function copyDirMinified(src, dest) {
 fs.rmSync(distDir, { recursive: true, force: true });
 await copyDirMinified(extensionDir, distDir);
 
+// Copia .env.example para dist/ (ao lado de chrome-extension/) como referência de configuração
+const distRoot = path.dirname(distDir);
+const distEnvExample = path.join(distRoot, '.env.example');
+if (fs.existsSync(envExampleFile)) {
+  fs.copyFileSync(envExampleFile, distEnvExample);
+  console.log(`Copiado: ${distEnvExample}`);
+} else {
+  console.warn('Aviso: .env.example nao encontrado na raiz do projeto — nao incluido no dist.');
+}
+
 console.log(`\nPacote minificado gerado em: ${distDir}`);
 console.log('Para instalar no Chrome: chrome://extensions -> Load unpacked -> dist/chrome-extension');
-console.log('Para empacotar como .zip: compacte o conteudo de dist/chrome-extension/');
+console.log('Para empacotar como .zip: compacte a pasta dist/ inteira (inclui .env.example)');
