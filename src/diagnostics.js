@@ -357,6 +357,12 @@ const WORKSPACE_PROMPT_LIMITS = {
   backendFiles: 6,
   frontendFiles: 4,
 };
+const WORKSPACE_PROMPT_LIMITS_ULTRA = {
+  backendChars: 3000,
+  frontendChars: 1500,
+  backendFiles: 2,
+  frontendFiles: 1,
+};
 
 // ─── Cores para o terminal ───────────────────────────────────────────────────
 
@@ -554,14 +560,32 @@ function prepareManagedPrompt({ mode, sections, findings, sourceFiles, metadata,
       `   ${c.gray}↳ Prompt business compactado: ${initialPrompt.length.toLocaleString()} → ` +
       `${compactPrompt.length.toLocaleString()} chars${c.reset}`
     );
+    if (compactPrompt.length <= TARGET_LLM_PROMPT_CHARS) {
+      return {
+        prompt: compactPrompt,
+        workspace: compactWorkspace,
+        ...promptPlan,
+        mainLimit: 3600,
+        zendeskLimit: 1200,
+        compacted: true,
+        promptLength: compactPrompt.length,
+      };
+    }
+
+    const ultraWorkspace = compactWorkspaceForLLM(workspace, 'business (tier 3 ultra-compacto)', WORKSPACE_PROMPT_LIMITS_ULTRA);
+    const ultraPrompt = buildBusinessPrompt(sections, metadata, pdfPath, numpages, ultraWorkspace, { mainLimit: 1800, zendeskLimit: 600 });
+    console.warn(
+      `   ${c.yellow}⚠ Prompt business ainda excede limite após tier 2 (${compactPrompt.length.toLocaleString()} chars). ` +
+      `Tier 3: ${ultraPrompt.length.toLocaleString()} chars${c.reset}`
+    );
     return {
-      prompt: compactPrompt,
-      workspace: compactWorkspace,
+      prompt: ultraPrompt,
+      workspace: ultraWorkspace,
       ...promptPlan,
-      mainLimit: 3600,
-      zendeskLimit: 1200,
+      mainLimit: 1800,
+      zendeskLimit: 600,
       compacted: true,
-      promptLength: compactPrompt.length,
+      promptLength: ultraPrompt.length,
     };
   }
 
@@ -597,15 +621,34 @@ function prepareManagedPrompt({ mode, sections, findings, sourceFiles, metadata,
     `   ${c.gray}↳ Prompt LGPD compactado: ${initialPrompt.length.toLocaleString()} → ` +
     `${compactPrompt.length.toLocaleString()} chars${c.reset}`
   );
+  if (compactPrompt.length <= TARGET_LLM_PROMPT_CHARS) {
+    return {
+      prompt: compactPrompt,
+      workspace: compactWorkspace,
+      ...promptPlan,
+      mainLimit: 3200,
+      zendeskLimit: 1000,
+      sourceFileLimit: 1800,
+      compacted: true,
+      promptLength: compactPrompt.length,
+    };
+  }
+
+  const ultraWorkspace = compactWorkspaceForLLM(workspace, 'LGPD (tier 3 ultra-compacto)', WORKSPACE_PROMPT_LIMITS_ULTRA);
+  const ultraPrompt = buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, ultraWorkspace, { mainLimit: 1600, zendeskLimit: 500, sourceFileLimit: 900 });
+  console.warn(
+    `   ${c.yellow}⚠ Prompt LGPD ainda excede limite após tier 2 (${compactPrompt.length.toLocaleString()} chars). ` +
+    `Tier 3: ${ultraPrompt.length.toLocaleString()} chars${c.reset}`
+  );
   return {
-    prompt: compactPrompt,
-    workspace: compactWorkspace,
+    prompt: ultraPrompt,
+    workspace: ultraWorkspace,
     ...promptPlan,
-    mainLimit: 3200,
-    zendeskLimit: 1000,
-    sourceFileLimit: 1800,
+    mainLimit: 1600,
+    zendeskLimit: 500,
+    sourceFileLimit: 900,
     compacted: true,
-    promptLength: compactPrompt.length,
+    promptLength: ultraPrompt.length,
   };
 }
 
@@ -2343,7 +2386,9 @@ function formatLineRanges(ranges, totalLines = null) {
 }
 
 function isLineAllowed(lineNumber, meta) {
-  if (!meta || !meta.lineRanges || meta.lineRanges.length === 0) return false;
+  if (!meta || !meta.lineRanges) return false;
+  // lineRanges vazio = arquivo incluído por conteúdo completo (sem recorte), todas as linhas são válidas
+  if (meta.lineRanges.length === 0) return true;
   return meta.lineRanges.some((range) => lineNumber >= range.start && lineNumber <= range.end);
 }
 
@@ -2812,7 +2857,7 @@ async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFile
 async function main() {
   console.log();
   console.log(`${c.bold}${c.cyan}╔══════════════════════════════════════════╗`);
-  console.log(`║   SHIELD — Diagnóstico LGPD & Negócio    ║`);
+  console.log(`║   JIRA SHIELD — Diagnóstico LGPD         ║`);
   console.log(`╚══════════════════════════════════════════╝${c.reset}`);
   console.log();
 

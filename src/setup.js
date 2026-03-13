@@ -59,7 +59,7 @@ function askHidden(question) {
 async function main() {
   console.log();
   console.log(`${c.bold}${c.cyan}╔══════════════════════════════════════╗`);
-  console.log(`║   LGPD Export — Configuração Inicial  ║`);
+  console.log(`║   JIRA SHIELD LGPD Export — Setup     ║`);
   console.log(`╚══════════════════════════════════════╝${c.reset}`);
   console.log();
 

@@ -1,7 +1,15 @@
+const AI_URLS = {
+  claude:  'https://claude.ai/new',
+  chatgpt: 'https://chat.openai.com/',
+  gemini:  'https://gemini.google.com/app',
+  copilot: 'https://copilot.microsoft.com/',
+};
+
 const state = {
   settings: null,
   history: [],
   detectedIssue: null,
+  exportResults: [],
 };
 
 function sendMessage(payload) {
@@ -28,6 +36,7 @@ function setStatus(message, variant) {
 
 function setBusy(busy) {
   document.getElementById('run-export').disabled = busy;
+  document.getElementById('run-ai-doc').disabled = busy;
   document.querySelectorAll('input[name="mode"]').forEach((node) => {
     node.disabled = busy;
   });
@@ -146,6 +155,54 @@ function describeZendeskStatus(item) {
   return 'Sem detalhes de Zendesk';
 }
 
+function buildAIPrompt(item) {
+  return `Você é um redator técnico especialista em documentação de software da TOTVS. Com base no ticket JIRA abaixo (já anonimizado conforme LGPD), gere um Documento Técnico (DT) no padrão oficial TOTVS TDN.
+
+## Regras de nomenclatura do título (DT)
+
+**Implementações** (inovações e débitos técnicos):
+  Formato: DT + Descrição + Localização (se existir)
+  Exemplos: "DT Fatura Eletrônica" | "DT Fatura Eletrônica ARG"
+
+**Correções** (manutenções):
+  Formato: Ticket + ID da Issue + DT + Descrição + Localização (se existir)
+  Exemplos: "122828 MRH-631 DT Erro Integração SAP" | "MRH-631 DT Erro Integração SAP"
+
+Identifique o tipo correto (implementação ou correção) pelo conteúdo do ticket.
+
+## Estrutura do documento a ser gerado
+
+### [Título conforme regra acima]
+
+**Problema**
+Resuma em poucas linhas, de forma objetiva, técnica e funcional, a situação que motivou este ticket (bug, erro, comportamento inesperado ou necessidade de implementação). Seja curto e direto ao ponto.
+
+**Solução**
+Resuma em poucas linhas, de forma objetiva, técnica e funcional, o que foi implementado ou corrigido para resolver o problema. Seja curto, direto ao ponto e foque no que realmente foi feito.
+
+**Assuntos Relacionados**
+Liste documentações do TDN (tdn.totvs.com) relacionadas ao tema tratado neste ticket. Para cada item, devolva obrigatoriamente:
+- **Título:** nome da documentação ou assunto relacionado
+- **URL:** link completo de referência
+Informe apenas links que você tenha alta confiança que existem. Se não tiver uma URL confiável, não invente e não inclua o item.
+
+---
+Use linguagem técnica, clara e objetiva. Responda em português.
+
+--- TICKET JIRA ANONIMIZADO: ${escapeHtml(item.issueKey)} ---
+${item.anonymizedText || '(conteúdo não disponível)'}
+--- FIM DO TICKET ---`;
+}
+
+async function analyzeWithAI(item) {
+  const prompt = buildAIPrompt(item);
+  await navigator.clipboard.writeText(prompt);
+  const provider = (state.settings && state.settings.aiProvider) || 'claude';
+  const url = AI_URLS[provider] || AI_URLS.claude;
+  chrome.tabs.create({ url });
+  setStatus('Prompt copiado! Cole-o na IA que foi aberta (Ctrl+V).', '');
+}
+
 function renderResults(response) {
   const list = document.getElementById('results');
   const summary = document.getElementById('result-summary');
@@ -153,6 +210,7 @@ function renderResults(response) {
   summary.textContent = '';
 
   const results = response && response.results ? response.results : [];
+  state.exportResults = results;
   if (!results.length) return;
 
   if (response.summary) {
@@ -161,11 +219,14 @@ function renderResults(response) {
       `Com Zendesk: ${response.summary.withZendesk} | Jira only: ${response.summary.jiraOnly}`;
   }
 
-  results.forEach((item) => {
+  results.forEach((item, index) => {
     const card = document.createElement('article');
     card.className = `result-card${item.ok ? '' : ' error'}`;
 
     if (item.ok) {
+      const aiButton = item.ticketId
+        ? `<div class="result-actions"><button class="ghost analyze-ai-btn" data-index="${index}" type="button">Gerar Documentação com IA</button></div>`
+        : '';
       card.innerHTML = `
         <div class="row result-head">
           <strong>${escapeHtml(item.issueKey)}</strong>
@@ -180,6 +241,7 @@ function renderResults(response) {
           <span class="metric">Comentarios ${item.commentCount}</span>
           <span class="metric">Anexos ${item.attachmentCount}</span>
         </div>
+        ${aiButton}
       `;
     } else {
       card.innerHTML = `
@@ -301,6 +363,98 @@ async function runExport() {
   }
 }
 
+function renderAIDocResults(response) {
+  const list = document.getElementById('results');
+  const summary = document.getElementById('result-summary');
+  list.innerHTML = '';
+  summary.textContent = '';
+
+  const results = (response && response.results) || [];
+  state.exportResults = results;
+  if (!results.length) return;
+
+  if (response.summary) {
+    summary.textContent = `Prontas para documentação: ${response.summary.success} | Falha: ${response.summary.failed}`;
+  }
+
+  results.forEach((item, index) => {
+    const card = document.createElement('article');
+    card.className = `result-card${item.ok ? '' : ' error'}`;
+
+    if (item.ok) {
+      card.innerHTML = `
+        <div class="row result-head">
+          <strong>${escapeHtml(item.issueKey)}</strong>
+          <span class="result-tag">${escapeHtml(item.mode === 'jira-only' ? 'Jira only' : 'Completo')}</span>
+        </div>
+        <div class="result-title">${escapeHtml(item.issueSummary || '(sem resumo)')}</div>
+        <div class="result-actions">
+          <button class="ghost analyze-ai-btn" data-index="${index}" type="button">Gerar Documentação com IA</button>
+        </div>
+      `;
+    } else {
+      card.innerHTML = `
+        <div class="row result-head">
+          <strong>${escapeHtml(item.issueKey)}</strong>
+          <span class="result-tag error">Falha</span>
+        </div>
+        <div class="result-meta">${escapeHtml(item.error || 'Falha nao detalhada.')}</div>
+      `;
+    }
+
+    list.appendChild(card);
+  });
+}
+
+async function runGenerateDoc() {
+  const keys = parseIssueKeys(document.getElementById('issue-keys').value);
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+
+  if (!keys.length) {
+    setStatus('Informe ao menos uma issue key.', 'warn');
+    renderAIDocResults({ results: [] });
+    return;
+  }
+
+  if (!state.settings || !state.settings.ready) {
+    setStatus('Configure JIRA_BASE_URL em Configurar antes de usar.', 'warn');
+    return;
+  }
+
+  setBusy(true);
+  setStatus(`Buscando e anonimizando ${keys.length} issue(s)...`, '');
+  renderAIDocResults({ results: [] });
+
+  try {
+    const response = await sendMessage({
+      type: 'generateAIDoc',
+      issueKeys: keys,
+      mode,
+    });
+
+    if (!response.ok && (!response.results || !response.results.length)) {
+      setStatus(response.error || 'Falha ao processar issues.', 'error');
+      return;
+    }
+
+    const successful = (response.results || []).filter((item) => item.ok);
+
+    if (successful.length === 1) {
+      await analyzeWithAI(successful[0]);
+    } else if (successful.length > 1) {
+      setStatus(`${successful.length} issues prontas. Clique em "Gerar Documentação com IA" em cada uma.`, '');
+      renderAIDocResults(response);
+    } else {
+      setStatus('Nenhuma issue processada com sucesso.', 'error');
+      renderAIDocResults(response);
+    }
+  } catch (error) {
+    setStatus(error.message, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function clearHistory() {
   const confirmed = window.confirm('Limpar o historico local de exportacoes da extensao?');
   if (!confirmed) return;
@@ -318,6 +472,10 @@ document.getElementById('run-export').addEventListener('click', () => {
   runExport().catch((error) => setStatus(error.message, 'error'));
 });
 
+document.getElementById('run-ai-doc').addEventListener('click', () => {
+  runGenerateDoc().catch((error) => setStatus(error.message, 'error'));
+});
+
 document.getElementById('open-options').addEventListener('click', () => chrome.runtime.openOptionsPage());
 
 document.getElementById('use-current-issue').addEventListener('click', () => {
@@ -327,6 +485,14 @@ document.getElementById('use-current-issue').addEventListener('click', () => {
 
 document.getElementById('clear-history').addEventListener('click', () => {
   clearHistory().catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('results').addEventListener('click', (e) => {
+  const btn = e.target.closest('.analyze-ai-btn');
+  if (!btn) return;
+  const index = parseInt(btn.dataset.index, 10);
+  const item = state.exportResults && state.exportResults[index];
+  if (item) analyzeWithAI(item).catch((err) => setStatus(err.message, 'error'));
 });
 
 loadDashboard().catch((error) => setStatus(error.message, 'error'));

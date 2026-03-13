@@ -326,7 +326,7 @@ export function generatePDF(issue) {
     doc.setFontSize(7.5);
     doc.setTextColor(...C.rodape);
     doc.text(
-      'Plugin JIRA LGPD Export — Dados anonimizados conforme Lei 13.709/2018',
+      'JIRA SHIELD LGPD Export — Dados anonimizados conforme Lei 13.709/2018',
       MARGIN, 293
     );
     doc.text(`Pág. ${p} / ${totalPages}`, PAGE_W - MARGIN - 22, 293);

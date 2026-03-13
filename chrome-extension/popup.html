@@ -17,8 +17,6 @@
       </header>
 
       <section class="panel stack">
-        <div id="settings-summary" class="summary-grid"></div>
-
         <div class="field">
           <div class="field-head">
             <label for="issue-keys">Issue keys</label>
@@ -51,7 +49,8 @@
 
         <div class="row actions">
           <button id="run-export" class="primary" type="button">Exportar</button>
-          <button id="open-options" class="secondary" type="button">Configurar</button>
+          <button id="run-ai-doc" class="secondary" type="button">Gerar Doc. com IA</button>
+          <button id="open-options" class="ghost" type="button">Configurar</button>
         </div>
 
         <div id="status" class="status"></div>
@@ -68,6 +67,16 @@
           <button id="clear-history" class="ghost" type="button">Limpar</button>
         </div>
         <div id="history" class="history-list"></div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Resumo do ambiente</h2>
+            <p class="section-copy">Jira, Zendesk e pasta de saída exibidos no final do popup.</p>
+          </div>
+        </div>
+        <div id="settings-summary" class="summary-grid summary-grid-vertical"></div>
       </section>
     </main>
 

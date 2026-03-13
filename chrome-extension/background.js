@@ -10,6 +10,7 @@ const DEFAULTS = {
   zendeskToken: '',
   zendeskJiraField: 'customfield_11086',
   downloadFolder: 'shield',
+  aiProvider: 'claude',
 };
 
 function delay(ms) {
@@ -471,6 +472,32 @@ function describeZendeskStatus(mode, ticketId, zendeskData) {
   return 'sem-ticket-zendesk';
 }
 
+function buildAnonymizedText(anonIssue) {
+  const f = anonIssue.fields || {};
+  const lines = [];
+  if (f.summary) lines.push(`RESUMO: ${f.summary}`);
+  if (f.status && f.status.name) lines.push(`STATUS: ${f.status.name}`);
+  if (f.priority && f.priority.name) lines.push(`PRIORIDADE: ${f.priority.name}`);
+  if (f.issuetype && f.issuetype.name) lines.push(`TIPO: ${f.issuetype.name}`);
+  if (f.description) {
+    lines.push('');
+    lines.push('DESCRIÇÃO:');
+    lines.push(f.description);
+  }
+  const comments = (f.comment && f.comment.comments) || [];
+  if (comments.length) {
+    lines.push('');
+    lines.push(`COMENTÁRIOS (${comments.length}):`);
+    comments.forEach((c, i) => {
+      const author = (c.author && c.author.displayName) || '[PESSOA]';
+      const date = c.created ? new Date(c.created).toLocaleString('pt-BR') : '';
+      lines.push(`--- Comentário ${i + 1} | ${author} | ${date} ---`);
+      lines.push(c.body || '');
+    });
+  }
+  return lines.join('\n');
+}
+
 async function exportSingleIssue(issueKey, mode, settings) {
   const issue = await fetchIssue(issueKey, settings);
   const zdField = settings.zendeskJiraField || 'customfield_11086';
@@ -485,6 +512,7 @@ async function exportSingleIssue(issueKey, mode, settings) {
 
   const { anonIssue, summary } = SHIELD.core.anonymizeIssue(issue, zendeskData);
   const pdfBuffer = SHIELD.pdf.generatePDF(anonIssue);
+  const anonymizedText = buildAnonymizedText(anonIssue);
   const metadata = buildMetadata(issueKey, issue, settings);
   const folder = normalizeDownloadFolder(settings.downloadFolder);
   const pdfFilename = `${issueKey}_LGPD_anonimizado.pdf`;
@@ -533,6 +561,7 @@ async function exportSingleIssue(issueKey, mode, settings) {
     metadataFilename,
     pdfDownloadId,
     metadataDownloadId,
+    anonymizedText,
   };
 }
 
@@ -559,6 +588,60 @@ function summarizeResults(results) {
   }
 
   return summary;
+}
+
+async function handleGenerateAIDoc(message) {
+  const settings = await getSettings();
+  if (!sanitizeBaseUrl(settings.jiraBaseUrl)) {
+    throw new Error('Configure JIRA_BASE_URL em Extensions > SHIELD > Options.');
+  }
+
+  const issueKeys = [...new Set((message.issueKeys || [])
+    .map((value) => String(value || '').trim().toUpperCase())
+    .filter(Boolean))];
+
+  if (!issueKeys.length) {
+    throw new Error('Informe ao menos uma issue key.');
+  }
+
+  const mode = message.mode === 'jira-only' ? 'jira-only' : 'full';
+  const results = [];
+
+  for (const issueKey of issueKeys) {
+    try {
+      const issue = await fetchIssue(issueKey, settings);
+      const zdField = settings.zendeskJiraField || 'customfield_11086';
+      const ticketId = SHIELD.core.extractTicketId(issue.fields ? issue.fields[zdField] : null);
+
+      let zendeskData = null;
+      if (mode !== 'jira-only' && ticketId) {
+        zendeskData = await fetchZendeskViaJira(ticketId, issueKey, settings);
+        if (!zendeskData) zendeskData = await fetchZendeskViaApi(ticketId, settings);
+        if (!zendeskData) zendeskData = await fetchZendeskViaTab(issueKey, settings);
+      }
+
+      const { anonIssue } = SHIELD.core.anonymizeIssue(issue, zendeskData);
+      const anonymizedText = buildAnonymizedText(anonIssue);
+
+      results.push({
+        ok: true,
+        issueKey,
+        issueSummary: issue.fields && issue.fields.summary ? issue.fields.summary : '',
+        mode,
+        ticketId,
+        anonymizedText,
+        zendeskSource: zendeskData ? zendeskData._source : null,
+      });
+    } catch (error) {
+      results.push({ ok: false, issueKey, mode, error: error.message });
+    }
+  }
+
+  return {
+    ok: results.some((item) => item.ok),
+    results,
+    summary: summarizeResults(results),
+  };
 }
 
 async function handleExportIssues(message) {
@@ -622,6 +705,7 @@ async function getSettingsSummary() {
     zendeskJiraField: settings.zendeskJiraField || 'customfield_11086',
     downloadFolder: normalizeDownloadFolder(settings.downloadFolder),
     capabilities: buildCapabilities(settings),
+    aiProvider: settings.aiProvider || 'claude',
   };
 }
 
@@ -652,6 +736,13 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) return false;
+
+  if (message.type === 'generateAIDoc') {
+    handleGenerateAIDoc(message)
+      .then((payload) => sendResponse(payload))
+      .catch((error) => sendResponse({ ok: false, error: error.message, results: [] }));
+    return true;
+  }
 
   if (message.type === 'exportIssues') {
     handleExportIssues(message)

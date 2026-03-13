@@ -8,6 +8,7 @@ const DEFAULTS = {
   zendeskToken: '',
   zendeskJiraField: 'customfield_11086',
   downloadFolder: 'shield',
+  aiProvider: 'claude',
 };
 
 function setStatus(message, variant) {
@@ -53,6 +54,7 @@ function readForm() {
     zendeskToken: document.getElementById('zendeskToken').value.trim(),
     zendeskJiraField: document.getElementById('zendeskJiraField').value.trim() || 'customfield_11086',
     downloadFolder: normalizeFolder(document.getElementById('downloadFolder').value),
+    aiProvider: (document.querySelector('input[name="aiProvider"]:checked') || {}).value || 'claude',
   };
 }
 
@@ -66,6 +68,9 @@ function fillForm(data) {
   document.getElementById('zendeskToken').value = data.zendeskToken || '';
   document.getElementById('zendeskJiraField').value = data.zendeskJiraField || 'customfield_11086';
   document.getElementById('downloadFolder').value = data.downloadFolder || 'shield';
+  const aiProviderVal = data.aiProvider || 'claude';
+  const aiRadio = document.querySelector(`input[name="aiProvider"][value="${aiProviderVal}"]`);
+  if (aiRadio) aiRadio.checked = true;
 }
 
 function isValidHttpUrl(value) {

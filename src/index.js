@@ -230,7 +230,7 @@ async function exportIssue(issueKey, mode = 'full') {
 async function main() {
   console.log();
   console.log(`${c.bold}${c.cyan}╔══════════════════════════════════════════╗`);
-  console.log(`║   SHIELD — LGPD Export (Jira Server)     ║`);
+  console.log(`║   JIRA SHIELD LGPD Export                ║`);
   console.log(`╚══════════════════════════════════════════╝${c.reset}`);
   console.log();
 

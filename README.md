@@ -25,6 +25,14 @@ Regras atuais do diagnÃ³stico:
 
 - em terminal interativo, o `diagnostics.js` oferece onboarding para `JIRA_TOKEN` e `WORKSPACE_*`, gravando no `.env` do projeto e no ambiente do usuário do Windows
 
+Melhorias recentes:
+
+- a extensao Chrome agora pode preparar documentacao tecnica com IA a partir do ticket anonimizado, copiando o prompt e abrindo Claude, ChatGPT, Gemini ou Copilot
+- o popup da extensao foi reorganizado para destacar exportacao, historico e resumo do ambiente, com os cards de ambiente empilhados para melhor leitura
+- a compactacao de contexto do diagnostico ganhou um terceiro tier ultra-compacto para reduzir prompts muito grandes antes do envio ao LLM
+- a extracao contextual de pessoas ficou mais conservadora para evitar falsos positivos em termos de triagem e vocabulario tecnico
+- a deteccao de RG passou a ignorar padroes dentro de URLs e query strings, reduzindo falso positivo em links
+
 ---
 
 ## Como funciona
@@ -86,6 +94,8 @@ Modo --lgpd (qualidade da anonimização):
   (fallback automático configurável: Claude CLI → Codex CLI → GitHub Copilot → API key)
 ```
 
+Se o prompt ainda ficar grande após a compactação normal, o diagnóstico aplica um terceiro tier ultra-compacto para reduzir ainda mais o contexto antes do envio ao provedor.
+
 ---
 
 ## Pré-requisitos
@@ -131,6 +141,8 @@ O repositório agora inclui uma extensao Chrome em [chrome-extension/](./chrome-
   - scraping simples da aba Zendesk do Jira
 - Mostra no popup o modo de autenticacao ativo, pasta de download e capacidades disponiveis
 - Armazena historico local das exportacoes no `chrome.storage.local`
+- Permite gerar um prompt de Documentacao Tecnica TOTVS (DT) com IA a partir do ticket anonimizado
+- Abre a IA escolhida no navegador e copia o prompt automaticamente para a area de transferencia
 
 ### O que fica fora da extensao
 
@@ -161,12 +173,14 @@ npm run build:extension
    - ou deixe vazio para usar a sessao ja aberta no navegador
 3. Opcionalmente configure `ZENDESK_*` para habilitar a API direta como fallback adicional
 4. Defina a pasta relativa dentro de `Downloads/`
-5. Abra o popup da extensao:
+5. Em **Options**, escolha a IA preferida para documentacao (`Claude`, `ChatGPT`, `Gemini` ou `Copilot`)
+6. Abra o popup da extensao:
    - use a issue detectada da aba atual
    - ou informe uma ou mais issue keys
    - escolha entre `Completo` e `Jira only`
-6. Clique em **Exportar** e acompanhe o resultado no popup
-7. Consulte o bloco de **Historico recente** para revisar exportacoes anteriores
+7. Clique em **Exportar** e acompanhe o resultado no popup
+8. Se a issue tiver ticket Zendesk vinculado, use **Gerar Doc. com IA** para abrir a IA escolhida com o prompt ja copiado
+9. Consulte o bloco de **Historico recente** para revisar exportacoes anteriores
 
 > Se `JIRA_TOKEN` ficar vazio, a extensao tenta usar a sessão já aberta no navegador.
 
@@ -176,7 +190,23 @@ npm run build:extension
 - gerar PDF anonimizado e metadata JSON em `Downloads/<pasta>`
 - operar em modo `Completo` ou `Jira only`
 - ver rapidamente se a extensao esta usando token, usuario/senha ou sessao do navegador
+- preparar documentacao tecnica TOTVS com IA sem reenviar dados brutos do ticket
 - revisar historico local das ultimas exportacoes e limpar esse historico quando necessario
+
+### Geracao de documentacao com IA
+
+Quando a exportacao encontra um ticket Zendesk vinculado, o popup passa a disponibilizar **Gerar Doc. com IA** para aquela issue. O fluxo faz o seguinte:
+
+- busca novamente a issue e os comentarios relacionados no modo selecionado
+- monta um texto anonimizado do ticket para servir de base ao documento
+- copia para a area de transferencia um prompt no padrao TOTVS TDN
+- abre automaticamente a IA escolhida nas options
+
+O prompt instrui a IA a:
+
+- gerar `Problema` e `Solucao` em formato resumido, curto, objetivo e funcional
+- devolver `Assuntos Relacionados` sempre com `Titulo` e `URL` completa de referencia
+- nao inventar links quando nao houver alta confianca na URL
 
 ---
 
@@ -293,6 +323,7 @@ npm run diagnose -- DMANQUALI-12311 --lgpd
 | `npm run diagnose -- KEY --lgpd --business` | `node src/diagnostics.js KEY --lgpd --business` | Ambas as análises |
 | `npm run setup` | `node src/setup.js` | Assistente interativo de configuração |
 | `npm run build:extension` | `node scripts/build-extension.js` | Copia o `jsPDF` para `chrome-extension/vendor/` e deixa a extensão carregável |
+| `npm run build:icons` | `node scripts/generate-icons.js` | Regenera os ícones PNG da extensão Chrome |
 
 ### Saída esperada no terminal (modo jira-only)
 
@@ -366,6 +397,12 @@ lgpd-export-standalone/
 | Regex estrutural | CPF, CNPJ, RG, PIS/PASEP, placa, passaporte, título de eleitor, e-mail, telefone, CEP, senha | Determinístico |
 
 > **Nomes compostos com preposição** são detectados corretamente em todos os detectores: `João da Silva`, `Maria dos Santos`, `Ana de Oliveira e Souza`.
+
+Refinamentos recentes da anonimização:
+
+- o extrator contextual passou a reconhecer melhor papéis de triagem, como `triagista`, `triador(a)` e frases como `triagem feita por`
+- a detecção de pessoas agora filtra melhor palavras comuns e vocabulário técnico para reduzir falso positivo após gatilhos contextuais
+- a regex de `RG` passou a ignorar padrões inseridos dentro de URLs e query strings
 
 ### Tokens gerados
 

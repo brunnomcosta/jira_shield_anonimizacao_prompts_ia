@@ -127,6 +127,40 @@
       </section>
 
       <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">IA para geração de documentação</h2>
+            <p class="section-copy">Após exportar uma issue com ticket Zendesk vinculado, um botão abrirá a IA escolhida para gerar um Documento Técnico TOTVS (DT).</p>
+          </div>
+        </div>
+        <div class="field">
+          <div class="legend">IA preferida</div>
+          <div class="mode-grid">
+            <label class="mode-card">
+              <input type="radio" name="aiProvider" value="claude">
+              <span class="mode-title">Claude.ai</span>
+              <span class="mode-copy">claude.ai — Gratuito, ótima compreensão em português</span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="aiProvider" value="chatgpt">
+              <span class="mode-title">ChatGPT</span>
+              <span class="mode-copy">chat.openai.com — GPT-4o Mini gratuito</span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="aiProvider" value="gemini">
+              <span class="mode-title">Gemini</span>
+              <span class="mode-copy">gemini.google.com — Gratuito do Google</span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="aiProvider" value="copilot">
+              <span class="mode-title">Copilot</span>
+              <span class="mode-copy">copilot.microsoft.com — Gratuito da Microsoft</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel stack">
         <div class="row actions">
           <button id="save" class="primary" type="button">Salvar</button>
           <button id="reset" class="secondary" type="button">Restaurar padrão</button>

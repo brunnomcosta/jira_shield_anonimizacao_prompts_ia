@@ -11,7 +11,8 @@ const PATTERNS = [
   { rx: /\(?\d{2}\)?\s?\d{4,5}[-–\s]?\d{4}\b/g,                                tag: '[TELEFONE]' },
   { rx: /\b\d{5}[-–]\d{3}\b/g,                                                  tag: '[CEP]'      },
   // RG — formatos estaduais comuns (XX.XXX.XXX-X ou XXXXXXXXX com dígito verificador letra/número)
-  { rx: /\b\d{2}\.?\d{3}\.?\d{3}[-–]?[0-9Xx]\b/g,                              tag: '[RG]'       },
+  // Lookbehind negativo exclui números dentro de URLs/query strings (ex: pageId=606095034)
+  { rx: /(?<![=\/#&?@])\b\d{2}\.?\d{3}\.?\d{3}[-–]?[0-9Xx]\b/g,               tag: '[RG]'       },
   // PIS / PASEP
   { rx: /\b\d{3}\.?\d{5}\.?\d{2}[-–]?\d\b/g,                                   tag: '[PIS]'      },
   // Placa veicular — formato antigo (ABC-1234) e Mercosul (ABC1D23)
