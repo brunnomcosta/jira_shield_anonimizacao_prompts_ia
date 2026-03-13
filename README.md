@@ -9,6 +9,19 @@ Ferramenta CLI Node.js com dois módulos complementares para conformidade LGPD n
 
 Compatível com Jira Server 8.x. A exportação ocorre **inteiramente no ambiente local** — nenhum dado pessoal é enviado a serviços externos.
 
+AtualizaÃ§Ã£o dos nomes padrÃ£o de workspace:
+
+- `WORKSPACE_ERP_BACKEND_DIR` substitui `WORKSPACE_BACKEND_DIR`
+- `WORKSPACE_MOBILE_FRONTEND_DIR` substitui `WORKSPACE_FRONTEND_DIR`
+- `WORKSPACE_ERP_INCLUDE_DIR` substitui `WORKSPACE_INCLUDE_DIR`
+
+Regras atuais do diagnÃ³stico:
+
+- o workspace de ERP / back-end Ã© sempre elegÃ­vel para correlaÃ§Ã£o
+- o workspace mobile / front-end sÃ³ entra quando o ticket indicar contexto de app mobile, Minha ProduÃ§Ã£o, celular, tablet ou sinÃ´nimos
+- os includes `.ch` do ERP sÃ£o usados para enriquecer a busca por conteÃºdo em fontes `.prw/.prx/.tlpp`
+- antes do envio ao LLM o CLI mostra progresso, provedor em uso, tempo decorrido e compacta a janela de contexto quando necessÃ¡rio
+
 ---
 
 ## Como funciona
@@ -46,21 +59,25 @@ node src/diagnostics.js DMANQUALI-12311 --lgpd --business  # ambas
 
 Modo padrão / --business (análise de negócio):
   1. Lê o PDF anonimizado e os metadados estruturais do ticket (metadata.json)
-  2. Alerta se JIRA_TOKEN / WORKSPACE_* estiverem ausentes e pede preenchimento para melhorar o resultado
+  2. Alerta se JIRA_TOKEN / WORKSPACE_* estiverem ausentes ou inválidos
   3. Sanitiza conteúdo antes de enviar ao LLM
   4. Exibe confirmação pré-envio com nomes dos arquivos e indica se cada artefato vai completo ou por trecho
-  5. Reconstrói timeline de eventos a partir dos comentários
-  6. Analisa sintomas, hipótese mais provável de causa raiz no produto e código do workspace
-  7. Rejeita respostas do LLM sem causa principal ou sem evidência válida
-  8. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
+  5. Mostra progresso durante a chamada ao LLM, com provedor, comandos e tempo decorrido
+  6. Compacta a janela de contexto antes do envio quando necessário
+  7. Reconstrói timeline de eventos a partir dos comentários
+  8. Analisa sintomas, hipótese mais provável de causa raiz no produto e código do workspace
+  9. Rejeita respostas do LLM sem causa principal ou sem evidência válida
+  10. Salva em output/diagnostic_business_<ISSUE_KEY>_<timestamp>.md
 
 Modo --lgpd (qualidade da anonimização):
   1. Extrai texto do PDF anonimizado
   2. Varredura local regex — detecta PII residual, tokens quebrados e fallbacks
   3. Sanitiza conteúdo (nenhuma PII real sai do ambiente)
   4. Exibe confirmação pré-envio com nomes dos arquivos e indica se cada artefato vai completo ou por trecho
-  5. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
-  6. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
+  5. Mostra progresso durante a chamada ao LLM, com provedor, comandos e tempo decorrido
+  6. Compacta a janela de contexto antes do envio quando necessário
+  7. Envia código-fonte da pipeline ao LLM para análise de causa raiz técnica
+  8. Salva em output/diagnostic_lgpd_<ISSUE_KEY>_<timestamp>.md
 
   (fallback automático configurável: Claude CLI → Codex CLI → GitHub Copilot → API key)
 ```
@@ -169,12 +186,12 @@ Todas as configurações ficam no arquivo `.env` na raiz do projeto.
 |---|---|
 | `ANTHROPIC_API_KEY` | Chave da API Anthropic (fallback se as sessões CLI não estiverem disponíveis) |
 | `LLM_PROVIDER_ORDER` | Ordem de tentativa dos provedores LLM (ex: `codex,claude,copilot,anthropic`) |
-| `WORKSPACE_BACKEND_DIR` | Raiz do código-fonte back-end para análise cruzada de causa raiz |
-| `WORKSPACE_FRONTEND_DIR` | Raiz do código-fonte front-end para análise cruzada de causa raiz |
-| `WORKSPACE_INCLUDE_DIR` | Raiz dos includes usados por fontes `.prw/.prx/.tlpp`; o diagnóstico usa `.ch` referenciados via `#include` para enriquecer a correlação por conteúdo |
+| `WORKSPACE_ERP_BACKEND_DIR` | Raiz do código-fonte do ERP / back-end para análise cruzada de causa raiz |
+| `WORKSPACE_MOBILE_FRONTEND_DIR` | Raiz do app mobile / front-end. O diagnóstico só usa esse workspace quando o ticket indicar contexto de app mobile, Minha Produção, celular, tablet ou sinônimos |
+| `WORKSPACE_ERP_INCLUDE_DIR` | Raiz dos includes usados por fontes `.prw/.prx/.tlpp`; o diagnóstico usa `.ch` referenciados via `#include` para enriquecer a correlação por conteúdo |
 | `WORKSPACE_EXTENSIONS` | Extensões de arquivo a incluir (padrão: `js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp`) |
 
-Quando `WORKSPACE_INCLUDE_DIR` está configurado, arquivos `.prw`, `.prx` e `.tlpp` passam a considerar o conteúdo dos `.ch` incluídos no cabeçalho apenas para melhorar o rankeamento por conteúdo. O trecho enviado ao LLM continua sendo do fonte principal.
+Quando `WORKSPACE_ERP_INCLUDE_DIR` está configurado, arquivos `.prw`, `.prx` e `.tlpp` passam a considerar o conteúdo dos `.ch` incluídos no cabeçalho apenas para melhorar o rankeamento por conteúdo. O trecho enviado ao LLM continua sendo do fonte principal.
 
 ---
 
@@ -515,7 +532,7 @@ O diagnóstico foi projetado para **não vazar dados pessoais** ao LLM externo, 
 - O código-fonte do workspace nunca contém dados de clientes
 - Antes de qualquer envio, o usuário recebe uma confirmação explícita mostrando PDF, metadados e a lista nominal dos arquivos que entrarão no prompt
 - O resumo diferencia envio completo vs. trecho: arquivos da pipeline `src/*.js` seguem completos; arquivos de backend/frontend do workspace seguem apenas com as faixas de linha extraídas
-- Se `JIRA_TOKEN` ou `WORKSPACE_BACKEND_DIR` / `WORKSPACE_FRONTEND_DIR` estiverem ausentes ou inválidos, o CLI alerta e pede o preenchimento do `.env` antes de continuar
+- Se `JIRA_TOKEN` ou `WORKSPACE_ERP_BACKEND_DIR` / `WORKSPACE_MOBILE_FRONTEND_DIR` estiverem ausentes ou inválidos, o CLI alerta sobre a perda de contexto local antes de continuar
 - O prompt exige uma única causa principal (`Causa mais provável:` / `Causa raiz mais provável:`), proíbe inventar arquivos/linhas e limita as referências aos trechos realmente enviados
 - Se o LLM retornar uma resposta sem causa principal ou com referências fora do contexto permitido, a saída é corrigida uma vez; se continuar sem evidência válida, o relatório é bloqueado para evitar conteúdo especulativo
 - Referências `arquivo:linha` só são aceitas se o arquivo realmente fizer parte do contexto enviado; para workspaces, a linha também precisa estar dentro das faixas exibidas nos snippets

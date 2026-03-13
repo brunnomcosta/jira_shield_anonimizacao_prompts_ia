@@ -34,11 +34,38 @@ const pdfParse = require('pdf-parse');
 
 const OUTPUT_DIR = resolve(__dirname, '..', process.env.OUTPUT_DIR || './output');
 const SRC_DIR    = resolve(__dirname);
+const ENV_ALIASES = {
+  WORKSPACE_ERP_BACKEND_DIR: ['WORKSPACE_ERP_BACKEND_DIR', 'WORKSPACE_BACKEND_DIR'],
+  WORKSPACE_MOBILE_FRONTEND_DIR: ['WORKSPACE_MOBILE_FRONTEND_DIR', 'WORKSPACE_FRONTEND_DIR'],
+  WORKSPACE_ERP_INCLUDE_DIR: ['WORKSPACE_ERP_INCLUDE_DIR', 'WORKSPACE_INCLUDE_DIR'],
+  JIRA_TOKEN: ['JIRA_TOKEN'],
+};
 
-// Diretórios de workspace externos (back-end / front-end da aplicação)
-const WORKSPACE_BACKEND_DIR  = process.env.WORKSPACE_BACKEND_DIR  ? resolve(process.env.WORKSPACE_BACKEND_DIR)  : null;
-const WORKSPACE_FRONTEND_DIR = process.env.WORKSPACE_FRONTEND_DIR ? resolve(process.env.WORKSPACE_FRONTEND_DIR) : null;
-const WORKSPACE_INCLUDE_DIR  = process.env.WORKSPACE_INCLUDE_DIR  ? resolve(process.env.WORKSPACE_INCLUDE_DIR)  : null;
+function getEnvValue(name) {
+  const aliases = ENV_ALIASES[name] || [name];
+  for (const alias of aliases) {
+    const value = String(process.env[alias] || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function resolveOptionalEnvPath(name) {
+  const raw = getEnvValue(name);
+  return raw ? resolve(raw) : null;
+}
+
+function getWorkspaceErpBackendDir() {
+  return resolveOptionalEnvPath('WORKSPACE_ERP_BACKEND_DIR');
+}
+
+function getWorkspaceMobileFrontendDir() {
+  return resolveOptionalEnvPath('WORKSPACE_MOBILE_FRONTEND_DIR');
+}
+
+function getWorkspaceErpIncludeDir() {
+  return resolveOptionalEnvPath('WORKSPACE_ERP_INCLUDE_DIR');
+}
 
 // Extensões de arquivo aceitas para leitura do workspace
 const WORKSPACE_EXTENSIONS = (process.env.WORKSPACE_EXTENSIONS || 'js,ts,java,py,cs,go,kt,jsx,tsx,vue,rb,php,prx,prw,tlpp')
@@ -72,6 +99,16 @@ const LLM_PROVIDER_LABELS = {
 const DEFAULT_LLM_PROVIDER_ORDER = ['claude', 'codex', 'copilot', 'anthropic'];
 const LLM_PROVIDER_ORDER = parseLLMProviderOrder(process.env.LLM_PROVIDER_ORDER);
 
+const LLM_PROGRESS_INTERVAL_MS = 15000;
+const LLM_PROVIDER_TIMEOUT_MS = 5 * 60 * 1000;
+const TARGET_LLM_PROMPT_CHARS = 32000;
+const WORKSPACE_PROMPT_LIMITS = {
+  backendChars: 9000,
+  frontendChars: 4500,
+  backendFiles: 6,
+  frontendFiles: 4,
+};
+
 // ─── Cores para o terminal ───────────────────────────────────────────────────
 
 const c = {
@@ -84,6 +121,21 @@ const c = {
   gray:   '\x1b[90m',
   blue:   '\x1b[34m',
 };
+
+const MOBILE_FRONTEND_HINTS = [
+  { rx: /\bminha produ[cç][aã]o\b/i, weight: 4, label: 'Minha Producao' },
+  { rx: /\bapp(?:licativo)?\s+mobile\b/i, weight: 4, label: 'app mobile' },
+  { rx: /\bmobile\b/i, weight: 3, label: 'mobile' },
+  { rx: /\bcelular\b/i, weight: 3, label: 'celular' },
+  { rx: /\btablet\b/i, weight: 3, label: 'tablet' },
+  { rx: /\bsmartphone\b/i, weight: 3, label: 'smartphone' },
+  { rx: /\bandroid\b/i, weight: 3, label: 'Android' },
+  { rx: /\bios\b/i, weight: 3, label: 'iOS' },
+  { rx: /\bionic\b/i, weight: 2, label: 'Ionic' },
+  { rx: /\bapk\b/i, weight: 2, label: 'APK' },
+  { rx: /\bplay store\b/i, weight: 2, label: 'Play Store' },
+  { rx: /\bapp\b/i, weight: 1, label: 'app' },
+];
 
 // ─── Mapeamento de tipos de problema → arquivo:linha ─────────────────────────
 
@@ -218,6 +270,94 @@ function resolvePdf(arg) {
   const pdfPath = pdfs[0].path;
   const match   = basename(pdfPath).match(/^([A-Z][A-Z0-9_]+-\d+)/i);
   return { pdfPath, issueKey: match ? match[1].toUpperCase() : null };
+}
+
+function prepareManagedPrompt({ mode, sections, findings, sourceFiles, metadata, pdfPath, numpages, workspace }) {
+  if (mode === 'business') {
+    const promptPlan = {
+      mode: 'Negócio',
+      mainLimit: 6000,
+      zendeskLimit: 2000,
+      sourceFileLimit: null,
+      compacted: false,
+    };
+    const initialPrompt = buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace);
+    if (initialPrompt.length <= TARGET_LLM_PROMPT_CHARS) {
+      console.log(`   ${c.gray}↳ Prompt business pronto com ${initialPrompt.length.toLocaleString()} chars${c.reset}`);
+      return { prompt: initialPrompt, workspace, ...promptPlan, promptLength: initialPrompt.length };
+    }
+
+    const compactWorkspace = compactWorkspaceForLLM(workspace, 'business (modo compacto)', {
+      backendChars: 6500,
+      frontendChars: 2800,
+      backendFiles: 4,
+      frontendFiles: 2,
+    });
+    const compactPrompt = buildBusinessPrompt(
+      sections,
+      metadata,
+      pdfPath,
+      numpages,
+      compactWorkspace,
+      { mainLimit: 3600, zendeskLimit: 1200 }
+    );
+    console.log(
+      `   ${c.gray}↳ Prompt business compactado: ${initialPrompt.length.toLocaleString()} → ` +
+      `${compactPrompt.length.toLocaleString()} chars${c.reset}`
+    );
+    return {
+      prompt: compactPrompt,
+      workspace: compactWorkspace,
+      ...promptPlan,
+      mainLimit: 3600,
+      zendeskLimit: 1200,
+      compacted: true,
+      promptLength: compactPrompt.length,
+    };
+  }
+
+  const promptPlan = {
+    mode: 'LGPD',
+    mainLimit: 5000,
+    zendeskLimit: 1500,
+    sourceFileLimit: null,
+    compacted: false,
+  };
+  const initialPrompt = buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace);
+  if (initialPrompt.length <= TARGET_LLM_PROMPT_CHARS) {
+    console.log(`   ${c.gray}↳ Prompt LGPD pronto com ${initialPrompt.length.toLocaleString()} chars${c.reset}`);
+    return { prompt: initialPrompt, workspace, ...promptPlan, promptLength: initialPrompt.length };
+  }
+
+  const compactWorkspace = compactWorkspaceForLLM(workspace, 'LGPD (modo compacto)', {
+    backendChars: 6000,
+    frontendChars: 2400,
+    backendFiles: 4,
+    frontendFiles: 2,
+  });
+  const compactPrompt = buildClaudePrompt(
+    sections,
+    findings,
+    sourceFiles,
+    pdfPath,
+    numpages,
+    compactWorkspace,
+    { mainLimit: 3200, zendeskLimit: 1000, sourceFileLimit: 1800 }
+  );
+  console.log(
+    `   ${c.gray}↳ Prompt LGPD compactado: ${initialPrompt.length.toLocaleString()} → ` +
+    `${compactPrompt.length.toLocaleString()} chars${c.reset}`
+  );
+  return {
+    prompt: compactPrompt,
+    workspace: compactWorkspace,
+    ...promptPlan,
+    mainLimit: 3200,
+    zendeskLimit: 1000,
+    sourceFileLimit: 1800,
+    compacted: true,
+    promptLength: compactPrompt.length,
+  };
 }
 
 /**
@@ -359,6 +499,107 @@ function readSourceFiles() {
     }
   }
   return result;
+}
+
+function detectMobileFrontendContext(pdfText, metadata = null) {
+  const haystacks = [
+    pdfText || '',
+    metadata?.summary || '',
+    (metadata?.labels || []).join(' '),
+    (metadata?.components || []).join(' '),
+    (metadata?.attachmentNames || []).join(' '),
+  ];
+
+  let score = 0;
+  const hits = [];
+
+  for (const hint of MOBILE_FRONTEND_HINTS) {
+    const matched = haystacks.some((value) => hint.rx.test(value));
+    if (matched) {
+      score += hint.weight;
+      hits.push(hint.label);
+    }
+  }
+
+  return {
+    enabled: score >= 3,
+    score,
+    hits: [...new Set(hits)],
+  };
+}
+
+function rankWorkspaceFileForPrompt(file) {
+  let priority = file?.score || 0;
+  if (file?.lineRanges?.length) priority += 1000;
+  if ((file?.content || '').length < 120) priority -= 500;
+  return priority;
+}
+
+function compactWorkspaceSide(files, { maxChars, maxFiles }) {
+  const original = files || [];
+  const eligible = original
+    .filter((file) => (file?.content || '').trim().length > 0)
+    .filter((file) => file.lineRanges?.length || (file.content || '').length >= 120)
+    .sort((a, b) => rankWorkspaceFileForPrompt(b) - rankWorkspaceFileForPrompt(a));
+
+  let chars = 0;
+  const kept = [];
+
+  for (const file of eligible) {
+    const contentLength = file.content.length;
+    const hitsLimit = kept.length >= maxFiles;
+    const charsLimit = kept.length > 0 && chars + contentLength > maxChars;
+    if (hitsLimit || charsLimit) continue;
+    kept.push(file);
+    chars += contentLength;
+  }
+
+  return {
+    files: kept,
+    stats: {
+      original: original.length,
+      kept: kept.length,
+      dropped: original.length - kept.length,
+      chars,
+    },
+  };
+}
+
+function compactWorkspaceForLLM(workspace, promptLabel, limits = WORKSPACE_PROMPT_LIMITS) {
+  if (!workspace) return workspace;
+
+  const backend = compactWorkspaceSide(workspace.backend, {
+    maxChars: limits.backendChars,
+    maxFiles: limits.backendFiles,
+  });
+  const frontend = compactWorkspaceSide(workspace.frontend, {
+    maxChars: limits.frontendChars,
+    maxFiles: limits.frontendFiles,
+  });
+
+  const changed =
+    backend.stats.dropped > 0 ||
+    frontend.stats.dropped > 0 ||
+    backend.stats.chars + frontend.stats.chars > TARGET_LLM_PROMPT_CHARS;
+
+  if (changed) {
+    console.log(
+      `   ${c.gray}↳ Janela de contexto ${promptLabel} compactada para o LLM: ` +
+      `ERP ${backend.stats.original}→${backend.stats.kept}, ` +
+      `mobile ${frontend.stats.original}→${frontend.stats.kept}${c.reset}`
+    );
+  }
+
+  return {
+    ...workspace,
+    backend: backend.files,
+    frontend: frontend.files,
+    compaction: {
+      backend: backend.stats,
+      frontend: frontend.stats,
+      changed,
+    },
+  };
 }
 
 /**
@@ -639,6 +880,29 @@ function extractSnippets(content, matchedLines, ctx = 10, maxSnippets = 5, maxCh
     const block = `// ── L${s + 1}–${e + 1} ──────────────────────\n` +
                   lines.slice(s, e + 1).join('\n') + '\n';
     if (chars + block.length > maxChars) {
+      const remaining = maxChars - chars;
+      if (remaining > 180) {
+        let consumed = 0;
+        let endLine = s - 1;
+        const compactedLines = [];
+
+        for (let lineIndex = s; lineIndex <= e; lineIndex++) {
+          const line = lines[lineIndex];
+          const projected = consumed + line.length + 1;
+          if (projected > Math.max(remaining - 96, 80)) break;
+          compactedLines.push(line);
+          consumed = projected;
+          endLine = lineIndex;
+        }
+
+        if (compactedLines.length > 0) {
+          out += (out ? '\n// ...\n\n' : '') +
+            `// trecho compactado L${s + 1}-${endLine + 1}\n` +
+            compactedLines.join('\n') +
+            `\n// [... linhas adicionais ${endLine + 2}-${e + 1} omitidas por limite de tamanho]\n`;
+          includedRanges.push({ start: s + 1, end: endLine + 1 });
+        }
+      }
       out += `\n// [... ${spans.length - si} bloco(s) adicional(is) omitido(s) por limite de tamanho]`;
       break;
     }
@@ -662,10 +926,20 @@ function extractSnippets(content, matchedLines, ctx = 10, maxSnippets = 5, maxCh
  *
  * Retorna { backend, frontend, configured, terms } onde terms são os termos usados.
  */
-function readWorkspaceFiles(pdfText) {
+function readWorkspaceFiles(pdfText, metadata = null) {
   const terms  = extractSearchTerms(pdfText);
-  const result = { backend: [], frontend: [], configured: false, terms };
-  const includeIndex = buildIncludeIndex(WORKSPACE_INCLUDE_DIR);
+  const frontendContext = detectMobileFrontendContext(pdfText, metadata);
+  const backendDir = getWorkspaceErpBackendDir();
+  const frontendDir = getWorkspaceMobileFrontendDir();
+  const includeDir = getWorkspaceErpIncludeDir();
+  const result = {
+    backend: [],
+    frontend: [],
+    configured: false,
+    terms,
+    frontendContext,
+  };
+  const includeIndex = buildIncludeIndex(includeDir);
 
   const MAX_CANDIDATES  = 80;   // candidatos lidos no passe 2 (pré-filtro por path)
   const MAX_FILES       = 15;   // arquivos incluídos no contexto final
@@ -675,7 +949,7 @@ function readWorkspaceFiles(pdfText) {
 
   if (includeIndex) {
     console.log(
-      `   ${c.gray}-> Includes: ${includeIndex.indexedFiles} arquivo(s) indexados em ${WORKSPACE_INCLUDE_DIR}${c.reset}`
+      `   ${c.gray}-> Includes ERP: ${includeIndex.indexedFiles} arquivo(s) indexados em ${includeDir}${c.reset}`
     );
   }
 
@@ -753,8 +1027,20 @@ function readWorkspaceFiles(pdfText) {
     return loaded;
   }
 
-  result.backend  = loadDir(WORKSPACE_BACKEND_DIR,  'Backend');
-  result.frontend = loadDir(WORKSPACE_FRONTEND_DIR, 'Frontend');
+  result.backend = loadDir(backendDir, 'ERP Back-end');
+
+  if (frontendDir && !frontendContext.enabled) {
+    result.configured = true;
+    console.log(
+      `   ${c.gray}↳ Front-end mobile ignorado: ticket sem sinais de Minha Producao/app mobile/celular/tablet${c.reset}`
+    );
+  } else if (frontendDir) {
+    console.log(
+      `   ${c.gray}↳ Front-end mobile habilitado por contexto: ${frontendContext.hits.join(', ')}${c.reset}`
+    );
+    result.frontend = loadDir(frontendDir, 'Front-end mobile');
+  }
+
   return result;
 }
 
@@ -802,16 +1088,18 @@ function loadMetadata(issueKey) {
  * Diferente do buildClaudePrompt (foco em LGPD QA), este foca no problema
  * reportado pelo cliente e na causa raiz no produto.
  */
-function buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace) {
+function buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace, options = {}) {
   const pdfName = basename(pdfPath);
 
   const cap = (str, limit) => str.length > limit
     ? str.slice(0, limit) + `\n[... truncado — total: ${str.length} chars ...]`
     : str;
 
-  const mainSample    = cap(sanitizeForLLM(sections.mainContent), 6000);
+  const mainLimit = options.mainLimit || 6000;
+  const zendeskLimit = options.zendeskLimit || 2000;
+  const mainSample    = cap(sanitizeForLLM(sections.mainContent), mainLimit);
   const zendeskSample = sections.zendeskContent
-    ? cap(sanitizeForLLM(sections.zendeskContent), 2000)
+    ? cap(sanitizeForLLM(sections.zendeskContent), zendeskLimit)
     : null;
 
   const backendBlock  = buildWorkspaceBlock(workspace?.backend,  'Backend');
@@ -979,17 +1267,20 @@ function sanitizeFindings(findings) {
  * @param {object} sections  - { mainContent, zendeskContent }
  * @param {object} workspace - { backend, frontend, configured }
  */
-function buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace) {
+function buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace, options = {}) {
   const pdfName = basename(pdfPath);
+  const mainLimit = options.mainLimit || 5000;
+  const zendeskLimit = options.zendeskLimit || 1500;
+  const sourceFileLimit = options.sourceFileLimit || null;
 
   const cap = (str, limit) => str.length > limit
     ? str.slice(0, limit) + `\n[... truncado — total: ${str.length} chars ...]`
     : str;
 
   // Sanitiza o conteúdo do PDF antes de enviar ao LLM — remove PII residual
-  const mainSample    = cap(sanitizeForLLM(sections.mainContent), 5000);
+  const mainSample    = cap(sanitizeForLLM(sections.mainContent), mainLimit);
   const zendeskSample = sections.zendeskContent
-    ? cap(sanitizeForLLM(sections.zendeskContent), 1500)
+    ? cap(sanitizeForLLM(sections.zendeskContent), zendeskLimit)
     : null;
 
   // Sanitiza os findings — preserva tipo/severidade/contagem, oculta os exemplos reais
@@ -1048,27 +1339,27 @@ ${findingsJson}
 
 ### src/anonymizer.js
 \`\`\`js
-${sourceFiles.anonymizer}
+${sourceFileLimit ? cap(sourceFiles.anonymizer, sourceFileLimit) : sourceFiles.anonymizer}
 \`\`\`
 
 ### src/nerDetector.js
 \`\`\`js
-${sourceFiles.nerDetector}
+${sourceFileLimit ? cap(sourceFiles.nerDetector, sourceFileLimit) : sourceFiles.nerDetector}
 \`\`\`
 
 ### src/entityMap.js
 \`\`\`js
-${sourceFiles.entityMap}
+${sourceFileLimit ? cap(sourceFiles.entityMap, sourceFileLimit) : sourceFiles.entityMap}
 \`\`\`
 
 ### src/signatureExtractor.js
 \`\`\`js
-${sourceFiles.signatureExtractor}
+${sourceFileLimit ? cap(sourceFiles.signatureExtractor, sourceFileLimit) : sourceFiles.signatureExtractor}
 \`\`\`
 
 ### src/contextualExtractor.js
 \`\`\`js
-${sourceFiles.contextualExtractor}
+${sourceFileLimit ? cap(sourceFiles.contextualExtractor, sourceFileLimit) : sourceFiles.contextualExtractor}
 \`\`\`
 
 ${backendBlock}${frontendBlock}
@@ -1166,11 +1457,112 @@ function summarizeProviderError(providerLabel, err) {
   return withoutPrefix.replace(/\s+/g, ' ').trim().slice(0, 220) || 'falha sem detalhes';
 }
 
-function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile }) {
+function formatDuration(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.round(ms / 100) / 10;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = (seconds % 60).toFixed(1);
+  return `${minutes}m${remaining}s`;
+}
+
+function formatCommandPreview(command, args) {
+  return [command, ...(args || [])].join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function simplifyAgentCommand(command) {
+  const raw = String(command || '').trim();
+  const powershellMatch = raw.match(/powershell(?:\.exe)?\"\s+-Command\s+(.+)$/i);
+  if (powershellMatch?.[1]) {
+    return powershellMatch[1].replace(/^"|"$/g, '');
+  }
+  return raw.replace(/\s+/g, ' ').trim();
+}
+
+function killProcessTree(pid) {
+  if (!pid) return;
+
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      shell: false,
+      windowsHide: true,
+    });
+    return;
+  }
+
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // ignora falhas de limpeza
+  }
+}
+
+function withProviderProgress({ providerLabel, activity, fn, timeoutMs = LLM_PROVIDER_TIMEOUT_MS }) {
+  const startedAt = Date.now();
+  console.log(`\n   ${c.gray}↳ ${providerLabel}: ${activity}${c.reset}`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const heartbeat = setInterval(() => {
+      const elapsed = formatDuration(Date.now() - startedAt);
+      console.log(`\n   ${c.gray}↳ ${providerLabel}: ${elapsed} em processamento; ${activity}${c.reset}`);
+    }, LLM_PROGRESS_INTERVAL_MS);
+
+    const timeoutHandle = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      reject(new Error(`${providerLabel}: timeout após ${formatDuration(Date.now() - startedAt)} (${activity})`));
+    }, timeoutMs);
+
+    Promise.resolve()
+      .then(fn)
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(heartbeat);
+        clearTimeout(timeoutHandle);
+        console.log(`\n   ${c.gray}↳ ${providerLabel}: concluido em ${formatDuration(Date.now() - startedAt)}${c.reset}`);
+        resolve(value);
+      })
+      .catch((error) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(heartbeat);
+        clearTimeout(timeoutHandle);
+        reject(error);
+      });
+  });
+}
+
+function handleProviderEvent(providerLabel, event) {
+  if (!event || typeof event !== 'object') return;
+  const item = event.item || null;
+  if (!item || item.type !== 'command_execution') return;
+
+  const summary = simplifyAgentCommand(item.command).slice(0, 220);
+  if (event.type === 'item.started') {
+    console.log(`\n   ${c.gray}↳ ${providerLabel}: agente executando ${summary}${c.reset}`);
+    return;
+  }
+
+  if (event.type === 'item.completed') {
+    const exitCode = Number.isInteger(item.exit_code) ? item.exit_code : '?';
+    console.log(`\n   ${c.gray}↳ ${providerLabel}: comando finalizado (exit ${exitCode}) ${summary}${c.reset}`);
+  }
+}
+
+function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile, jsonEvents = false }) {
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let heartbeat = null;
+    let timeoutHandle = null;
+    let stdoutBuffer = '';
+    const startedAt = Date.now();
+    const commandPreview = formatCommandPreview(command, args);
 
     const cleanupOutput = () => {
       if (!outputFile) return '';
@@ -1184,16 +1576,56 @@ function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile }) 
     const settle = (fn, value) => {
       if (settled) return;
       settled = true;
+      if (heartbeat) clearInterval(heartbeat);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       fn(value);
     };
 
+    console.log(`\n   ${c.gray}↳ ${providerLabel}: executando ${commandPreview}${c.reset}`);
     const proc = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
       windowsHide: true,
     });
 
-    proc.stdout.on('data', d => stdout += d.toString());
+    heartbeat = setInterval(() => {
+      const elapsed = formatDuration(Date.now() - startedAt);
+      console.log(
+        `\n   ${c.gray}↳ ${providerLabel}: ${elapsed} em processamento; aguardando retorno do modelo...${c.reset}`
+      );
+    }, LLM_PROGRESS_INTERVAL_MS);
+
+    timeoutHandle = setTimeout(() => {
+      const elapsed = formatDuration(Date.now() - startedAt);
+      killProcessTree(proc.pid);
+      cleanupOutput();
+      settle(
+        reject,
+        new Error(`${providerLabel}: timeout apÃ³s ${elapsed} executando ${commandPreview}`)
+      );
+    }, LLM_PROVIDER_TIMEOUT_MS);
+
+    proc.stdout.on('data', d => {
+      const chunk = d.toString();
+      if (!jsonEvents) {
+        stdout += chunk;
+        return;
+      }
+
+      stdoutBuffer += chunk;
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          handleProviderEvent(providerLabel, JSON.parse(trimmed));
+        } catch {
+          stdout += `${trimmed}\n`;
+        }
+      }
+    });
     proc.stderr.on('data', d => stderr += d.toString());
 
     proc.on('error', e => {
@@ -1202,11 +1634,21 @@ function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile }) 
     });
 
     proc.on('close', code => {
+      if (jsonEvents && stdoutBuffer.trim()) {
+        try {
+          handleProviderEvent(providerLabel, JSON.parse(stdoutBuffer.trim()));
+        } catch {
+          stdout += stdoutBuffer.trim();
+        }
+      }
+
       const fileOutput = cleanupOutput();
       const response = fileOutput || stdout.trim();
       const details = stderr.trim().slice(0, 300) || stdout.trim().slice(0, 300) || 'sem detalhes';
+      const elapsed = formatDuration(Date.now() - startedAt);
 
       if (code === 0 && response) {
+        console.log(`\n   ${c.gray}↳ ${providerLabel}: concluido em ${elapsed}${c.reset}`);
         settle(resolve, response);
       } else {
         settle(reject, new Error(`${providerLabel}: exit ${code} — ${details}`));
@@ -1236,12 +1678,23 @@ function callClaudeCLI(prompt) {
  */
 function callCodexCLI(prompt) {
   const tmpFile = join(os.tmpdir(), `lgpd_codex_${Date.now()}.txt`);
+  const isolatedDir = join(os.tmpdir(), 'lgpd-codex-llm');
+  const guidedPrompt = [
+    'Use exclusivamente o contexto fornecido nesta entrada.',
+    'Nao execute comandos shell, nao tente inspecionar arquivos adicionais e nao navegue pelo workspace.',
+    'Se a evidencia nao for suficiente, responda "Inconclusivo com os dados fornecidos".',
+    '',
+    prompt,
+  ].join('\n');
+
+  fs.mkdirSync(isolatedDir, { recursive: true });
   return runCLIWithPrompt({
     command: 'codex',
-    args: ['exec', '--skip-git-repo-check', '--color', 'never', '--output-last-message', tmpFile, '-'],
-    prompt,
+    args: ['exec', '-C', isolatedDir, '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--json', '--output-last-message', tmpFile, '-'],
+    prompt: guidedPrompt,
     providerLabel: LLM_PROVIDER_LABELS.codex,
     outputFile: tmpFile,
+    jsonEvents: true,
   });
 }
 
@@ -1287,6 +1740,44 @@ async function getCopilotToken(githubToken) {
  * Não requer créditos extras — usa o plano Copilot já ativo.
  */
 async function callCopilot(prompt) {
+  return withProviderProgress({
+    providerLabel: LLM_PROVIDER_LABELS.copilot,
+    activity: 'obtendo token do GitHub e chamando a API',
+    fn: async () => {
+      const githubToken  = await getGithubToken();
+      const copilotToken = await getCopilotToken(githubToken);
+
+      const res = await fetch('https://api.githubcopilot.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization':           `Bearer ${copilotToken}`,
+          'Content-Type':            'application/json',
+          'Copilot-Integration-Id':  'vscode-chat',
+          'Editor-Version':          'vscode/1.85.0',
+          'Editor-Plugin-Version':   'copilot-chat/0.12.0',
+          'OpenAI-Intent':           'conversation-panel',
+        },
+        body: JSON.stringify({
+          model:      'gpt-4o',
+          messages:   [{ role: 'user', content: prompt }],
+          max_tokens: 8000,
+          stream:     false,
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Copilot API: ${res.status} â€” ${errText.slice(0, 200)}`);
+      }
+
+      const data = await res.json();
+      const text = data.choices?.[0]?.message?.content;
+      if (!text) throw new Error('GitHub Copilot retornou resposta vazia');
+      return text;
+    },
+  });
+
+  /*
   const githubToken  = await getGithubToken();
   const copilotToken = await getCopilotToken(githubToken);
 
@@ -1317,6 +1808,7 @@ async function callCopilot(prompt) {
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error('GitHub Copilot retornou resposta vazia');
   return text;
+  */
 }
 
 /**
@@ -1372,6 +1864,7 @@ async function callClaude(prompt) {
     if (!provider) continue;
 
     try {
+      console.log(`   ${c.gray}↳ Tentando ${provider.label}...${c.reset}`);
       const result = await provider.run();
       label(provider.label);
       return result;
@@ -1467,6 +1960,9 @@ function hasJiraAuthConfigured() {
 
 function getConfigurationGaps() {
   const gaps = [];
+  const backendDir = getWorkspaceErpBackendDir();
+  const frontendDir = getWorkspaceMobileFrontendDir();
+  const includeDir = getWorkspaceErpIncludeDir();
 
   if (!hasJiraAuthConfigured()) {
     gaps.push({
@@ -1476,38 +1972,44 @@ function getConfigurationGaps() {
     });
   }
 
-  if (!WORKSPACE_BACKEND_DIR) {
+  if (!backendDir) {
     gaps.push({
-      label: 'Workspace Back-end',
-      env: 'WORKSPACE_BACKEND_DIR',
+      label: 'Workspace ERP',
+      env: 'WORKSPACE_ERP_BACKEND_DIR',
       impact: 'A análise de negócio não consegue correlacionar o efeito reportado com fontes locais do back-end.',
     });
-  } else if (!fs.existsSync(WORKSPACE_BACKEND_DIR)) {
+  } else if (!fs.existsSync(backendDir)) {
     gaps.push({
-      label: 'Workspace Back-end',
-      env: `WORKSPACE_BACKEND_DIR=${WORKSPACE_BACKEND_DIR}`,
+      label: 'Workspace ERP',
+      env: `WORKSPACE_ERP_BACKEND_DIR=${backendDir}`,
       impact: 'O diretório configurado não existe. Nenhum fonte local de back-end será considerado na análise.',
     });
   }
 
-  if (!WORKSPACE_FRONTEND_DIR) {
+  if (!frontendDir) {
     gaps.push({
-      label: 'Workspace Front-end',
-      env: 'WORKSPACE_FRONTEND_DIR',
+      label: 'Workspace App mobile',
+      env: 'WORKSPACE_MOBILE_FRONTEND_DIR',
       impact: 'A análise de negócio não consegue correlacionar o efeito reportado com fontes locais do front-end.',
     });
-  } else if (!fs.existsSync(WORKSPACE_FRONTEND_DIR)) {
+  } else if (!fs.existsSync(frontendDir)) {
     gaps.push({
-      label: 'Workspace Front-end',
-      env: `WORKSPACE_FRONTEND_DIR=${WORKSPACE_FRONTEND_DIR}`,
+      label: 'Workspace App mobile',
+      env: `WORKSPACE_MOBILE_FRONTEND_DIR=${frontendDir}`,
       impact: 'O diretório configurado não existe. Nenhum fonte local de front-end será considerado na análise.',
     });
   }
 
-  if (WORKSPACE_INCLUDE_DIR && !fs.existsSync(WORKSPACE_INCLUDE_DIR)) {
+  if (!includeDir) {
     gaps.push({
-      label: 'Workspace Includes',
-      env: `WORKSPACE_INCLUDE_DIR=${WORKSPACE_INCLUDE_DIR}`,
+      label: 'Includes do ERP',
+      env: 'WORKSPACE_ERP_INCLUDE_DIR',
+      impact: 'Sem os includes do ERP, fontes .prw/.prx/.tlpp perdem correlaÃ§Ã£o com STR, mensagens de help e textos de UI definidos em .ch.',
+    });
+  } else if (!fs.existsSync(includeDir)) {
+    gaps.push({
+      label: 'Includes do ERP',
+      env: `WORKSPACE_ERP_INCLUDE_DIR=${includeDir}`,
       impact: 'O diretorio de includes configurado nao existe. Fontes .prw/.prx/.tlpp nao serao enriquecidos com STR e mensagens vindas de .ch.',
     });
   }
@@ -1586,7 +2088,7 @@ function collectAllowedEvidencePaths(workspace, includePipeline = false) {
 
 function formatLineRanges(ranges, totalLines = null) {
   if (!ranges || ranges.length === 0) {
-    return totalLines ? `1-${totalLines}` : 'n/d';
+    return totalLines ? `compactado (total original: ${totalLines} linhas)` : 'compactado';
   }
   return ranges.map((r) => `${r.start}-${r.end}`).join(', ');
 }
@@ -1732,12 +2234,168 @@ async function ensureEvidenceBasedReport({ mode, report, basePrompt, workspace, 
  * @param {object|null}   opts.sourceFiles  - arquivos da pipeline (modo LGPD)
  * @param {string}        opts.pdfPath      - caminho do PDF
  */
-async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFiles, pdfPath }) {
+async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFiles, pdfPath, promptPlans = [] }) {
   const pdfName = basename(pdfPath);
   const mainChars = sanitizeForLLM(sections.mainContent || '').length;
   const zdChars = sections.zendeskContent
     ? sanitizeForLLM(sections.zendeskContent).length
     : 0;
+  {
+    const plans = promptPlans.length > 0
+      ? promptPlans
+      : modes.map((mode) => ({
+          mode,
+          mainLimit: mode === 'LGPD' ? 5000 : 6000,
+          zendeskLimit: mode === 'LGPD' ? 1500 : 2000,
+          sourceFileLimit: mode === 'LGPD' ? null : null,
+          promptLength: 0,
+          compacted: false,
+          workspace,
+        }));
+    const labelWidth = 32;
+    const printLine = (label, value) =>
+      console.log(`  ${c.gray}${label.padEnd(labelWidth)}${c.reset}${value}`);
+    const printDetail = (value) =>
+      console.log(`  ${' '.repeat(labelWidth + 2)}${c.gray}-> ${c.reset}${value}`);
+    const describeTextSend = (charCount, limits, fullLabel, partialLabel) => {
+      if (limits.length === 0) return `${charCount.toLocaleString()} chars`;
+
+      const fullModes = limits.filter(({ limit }) => charCount <= limit).map(({ mode }) => mode);
+      const partialModes = limits.filter(({ limit }) => charCount > limit).map(({ mode }) => mode);
+
+      if (partialModes.length === 0) return `${charCount.toLocaleString()} chars - ${fullLabel}`;
+      if (fullModes.length === 0) return `${charCount.toLocaleString()} chars - ${partialLabel}`;
+      return `${charCount.toLocaleString()} chars - completo em ${fullModes.join(', ')}; trecho em ${partialModes.join(', ')}`;
+    };
+    const mergeWorkspaceFiles = (side, prefix) => {
+      const merged = new Map();
+      for (const plan of plans) {
+        for (const file of plan.workspace?.[side] || []) {
+          const key = `${prefix}/${file.rel}`;
+          if (!merged.has(key)) {
+            merged.set(key, {
+              rel: file.rel,
+              lineRanges: file.lineRanges,
+              totalLines: file.totalLines,
+              modes: [],
+            });
+          }
+          const entry = merged.get(key);
+          if (!entry.modes.includes(plan.mode)) entry.modes.push(plan.mode);
+        }
+      }
+      return [...merged.values()];
+    };
+
+    const mainLimits = [...new Map(plans.map((plan) => [plan.mode, { mode: plan.mode, limit: plan.mainLimit }])).values()];
+    const zendeskLimits = [...new Map(plans.map((plan) => [plan.mode, { mode: plan.mode, limit: plan.zendeskLimit }])).values()];
+    const backendFiles = mergeWorkspaceFiles('backend', 'Backend');
+    const frontendFiles = mergeWorkspaceFiles('frontend', 'Frontend');
+    const lgpdPlans = plans.filter((plan) => plan.mode === 'LGPD');
+    const pipelineLimit = lgpdPlans.length > 0
+      ? Math.min(...lgpdPlans.map((plan) => plan.sourceFileLimit || Number.MAX_SAFE_INTEGER))
+      : null;
+    const pipelineFiles = sourceFiles && lgpdPlans.length > 0
+      ? PIPELINE_SOURCE_FILES
+        .filter(({ key }) => Object.prototype.hasOwnProperty.call(sourceFiles, key))
+        .map(({ key, ref }) => {
+          const content = String(sourceFiles[key] || '');
+          const placeholder = content.startsWith('// Arquivo ');
+          const partial = !placeholder && Number.isFinite(pipelineLimit) && content.length > pipelineLimit;
+          return {
+            ref,
+            sentAs: placeholder
+              ? 'placeholder (arquivo nao encontrado localmente)'
+              : partial
+                ? 'trecho compactado'
+                : 'arquivo completo',
+            modes: lgpdPlans.map((plan) => plan.mode),
+          };
+        })
+      : [];
+    const compactionDetails = plans
+      .filter((plan) => plan.compacted || plan.workspace?.compaction?.changed)
+      .map((plan) => {
+        const backendStats = plan.workspace?.compaction?.backend;
+        const frontendStats = plan.workspace?.compaction?.frontend;
+        const pieces = [`prompt final ${plan.promptLength.toLocaleString()} chars`];
+        if (backendStats) pieces.push(`ERP ${backendStats.original}->${backendStats.kept}`);
+        if (frontendStats) pieces.push(`mobile ${frontendStats.original}->${frontendStats.kept}`);
+        return `${plan.mode}: ${pieces.join('; ')}`;
+      });
+
+    console.log(`${c.bold}${c.yellow}â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”`);
+    console.log(`â”‚  âš ï¸  ConfirmaÃ§Ã£o de envio ao modelo de linguagem (LLM)        â”‚`);
+    console.log(`â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜${c.reset}`);
+    console.log();
+    console.log('  Os seguintes artefatos serÃ£o enviados ao LLM:');
+    console.log();
+
+    printLine('Arquivo PDF (texto extraÃ­do):', `${pdfName}  (${describeTextSend(mainChars, mainLimits, 'texto sanitizado completo', 'trecho sanitizado')})`);
+    if (zdChars > 0) {
+      printLine('ComentÃ¡rios Zendesk:', describeTextSend(zdChars, zendeskLimits, 'texto sanitizado completo', 'trecho sanitizado'));
+    }
+    if (metadata) {
+      printLine('Metadados do ticket (JSON):', 'labels, versÃµes, sprint, links â€” sem dados pessoais');
+    }
+    if (pipelineFiles.length > 0) {
+      printLine('CÃ³digo-fonte da pipeline:', `${pipelineFiles.length} arquivo(s) de src/`);
+      pipelineFiles.forEach((file) => printDetail(`${file.ref}  (${file.sentAs}; modos: ${file.modes.join(', ')})`));
+    }
+    if (backendFiles.length > 0) {
+      printLine('Arquivos Backend:', `${backendFiles.length} arquivo(s) do workspace - somente trechos`);
+      backendFiles.forEach((file) =>
+        printDetail(`Backend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho; modos: ${file.modes.join(', ')})`)
+      );
+    }
+    if (frontendFiles.length > 0) {
+      printLine('Arquivos Frontend:', `${frontendFiles.length} arquivo(s) do workspace - somente trechos`);
+      frontendFiles.forEach((file) =>
+        printDetail(`Frontend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho; modos: ${file.modes.join(', ')})`)
+      );
+    } else if (workspace?.frontendContext && !workspace.frontendContext.enabled && getWorkspaceMobileFrontendDir()) {
+      printLine('Arquivos Frontend:', 'nenhum enviado neste ticket');
+      printDetail('Front-end mobile ignorado por falta de sinais de app mobile, Minha ProduÃ§Ã£o, celular ou tablet no contexto');
+    }
+    if (backendFiles.length === 0 && frontendFiles.length === 0) {
+      printLine('Workspaces locais:', 'nenhum trecho de cÃ³digo local serÃ¡ enviado');
+    }
+    if (compactionDetails.length > 0) {
+      printLine('Janela de contexto:', 'compactada para caber no provedor');
+      compactionDetails.forEach(printDetail);
+    }
+
+    console.log();
+    console.log(`  ${c.bold}Finalidade:${c.reset}`);
+    plans.forEach((plan) => {
+      if (plan.mode === 'Negócio') {
+        console.log(`    ${c.cyan}â€¢ AnÃ¡lise de NegÃ³cio${c.reset} â€” identificar causa raiz do bug e propor soluÃ§Ã£o`);
+      } else if (plan.mode === 'LGPD') {
+        console.log(`    ${c.cyan}â€¢ AnÃ¡lise LGPD${c.reset}       â€” avaliar qualidade da anonimizaÃ§Ã£o e detectar vazamentos`);
+      }
+    });
+    console.log();
+    console.log(`  ${c.gray}Dados pessoais (PII) sÃ£o removidos antes do envio (substituÃ­dos por [REDACTED]).${c.reset}`);
+    console.log(`  ${c.gray}O destino Ã© determinado pela ordem configurada: ${describeLLMProviderOrder()}.${c.reset}`);
+    console.log(`  ${c.gray}SaÃ­das sem causa principal ou sem evidÃªncia vÃ¡lida sÃ£o rejeitadas automaticamente.${c.reset}`);
+    console.log();
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    return new Promise((resolve) => {
+      rl.question(`  Deseja prosseguir? ${c.bold}[s/N]${c.reset} `, (answer) => {
+        rl.close();
+        const yes = answer.trim().toLowerCase() === 's';
+        if (!yes) {
+          console.log();
+          console.log(`${c.yellow}âš ï¸  Envio cancelado pelo usuÃ¡rio.${c.reset}`);
+          console.log(`  ${c.gray}Use --no-llm para gerar apenas a varredura local sem anÃ¡lise de IA.${c.reset}`);
+          console.log();
+        }
+        resolve(yes);
+      });
+    });
+  }
+  /*
   const hasBusinessMode = modes.some((mode) => mode.startsWith('Neg'));
   const hasLGPDMode = modes.includes('LGPD');
 
@@ -1897,6 +2555,7 @@ async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFile
       resolve(yes);
     });
   });
+  */
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -1968,8 +2627,10 @@ async function main() {
   // 3. Extrair texto do PDF
   process.stdout.write(`${c.yellow}⏳ Extraindo texto do PDF...${c.reset}`);
   let text, numpages;
+  const pdfStartedAt = Date.now();
   try {
     ({ text, numpages } = await extractPdfText(pdfPath));
+    console.log(`   ${c.gray}↳ PDF processado em ${formatDuration(Date.now() - pdfStartedAt)}${c.reset}`);
     console.log(` ${c.green}OK${c.reset} (${numpages} página(s), ${text.length} chars)`);
   } catch (err) {
     console.log();
@@ -1984,8 +2645,10 @@ async function main() {
   }
 
   process.stdout.write(`${c.yellow}🔍 Varredura local de PII...${c.reset}`);
+  const localScanStartedAt = Date.now();
   const findings = localDetect(text);
   console.log(` ${c.green}OK${c.reset}`);
+  console.log(`   ${c.gray}↳ Varredura local concluida em ${formatDuration(Date.now() - localScanStartedAt)}${c.reset}`);
 
   if (findings.length === 0) {
     console.log(`   ${c.green}✅ Nenhum problema detectado pela varredura regex${c.reset}`);
@@ -2001,16 +2664,25 @@ async function main() {
   let sourceFiles, workspace;
   if (runLGPD) {
     process.stdout.write(`${c.yellow}📂 Carregando código-fonte da pipeline...${c.reset}`);
+    const pipelineStartedAt = Date.now();
     sourceFiles = readSourceFiles();
     console.log(` ${c.green}OK${c.reset}`);
+    console.log(`   ${c.gray}↳ Fontes da pipeline carregadas em ${formatDuration(Date.now() - pipelineStartedAt)}${c.reset}`);
   }
 
   process.stdout.write(`${c.yellow}🗂️  Escaneando workspace...${c.reset}`);
-  workspace = readWorkspaceFiles(text);
+  const workspaceStartedAt = Date.now();
+  workspace = readWorkspaceFiles(text, metadata);
+  workspace = compactWorkspaceForLLM(workspace, 'do ticket');
+  const workspaceScanElapsed = formatDuration(Date.now() - workspaceStartedAt);
   if (!workspace.configured) {
-    console.log(` ${c.gray}não configurado (WORKSPACE_BACKEND_DIR / WORKSPACE_FRONTEND_DIR)${c.reset}`);
+    console.log(` ${c.gray}não configurado (WORKSPACE_ERP_BACKEND_DIR / WORKSPACE_MOBILE_FRONTEND_DIR)${c.reset}`);
   } else {
     console.log(` ${c.green}OK${c.reset}`);
+  }
+
+  if (workspace.configured) {
+    console.log(`   ${c.gray}↳ Workspace analisado em ${workspaceScanElapsed}${c.reset}`);
   }
 
   const configGaps = getConfigurationGaps();
@@ -2033,6 +2705,38 @@ async function main() {
     ...(runBusiness ? ['Negócio'] : []),
     ...(runLGPD     ? ['LGPD']    : []),
   ];
+  const promptPlans = [];
+  let lgpdPromptData = null;
+  let businessPromptData = null;
+
+  if (runLGPD) {
+    lgpdPromptData = prepareManagedPrompt({
+      mode: 'lgpd',
+      sections,
+      findings,
+      sourceFiles,
+      metadata,
+      pdfPath,
+      numpages,
+      workspace,
+    });
+    promptPlans.push(lgpdPromptData);
+  }
+
+  if (runBusiness) {
+    businessPromptData = prepareManagedPrompt({
+      mode: 'business',
+      sections,
+      findings,
+      sourceFiles,
+      metadata,
+      pdfPath,
+      numpages,
+      workspace,
+    });
+    promptPlans.push(businessPromptData);
+  }
+
   const confirmed = await confirmLLMSend({
     modes,
     sections,
@@ -2040,6 +2744,7 @@ async function main() {
     workspace,
     sourceFiles: runLGPD ? sourceFiles : null,
     pdfPath,
+    promptPlans,
   });
   if (!confirmed) process.exit(0);
 
@@ -2050,13 +2755,14 @@ async function main() {
     process.stdout.write(`${c.yellow}🔒 Análise LGPD — enviando para LLM...${c.reset}`);
     let lgpdReport;
     try {
-      const prompt = buildClaudePrompt(sections, findings, sourceFiles, pdfPath, numpages, workspace);
+      const promptData = lgpdPromptData;
+      const prompt = promptData.prompt;
       lgpdReport = await callClaude(prompt);
       lgpdReport = await ensureEvidenceBasedReport({
         mode: 'lgpd',
         report: lgpdReport,
         basePrompt: prompt,
-        workspace,
+        workspace: promptData.workspace,
         includePipeline: true,
       });
       console.log(` ${c.green}OK${c.reset}`);
@@ -2084,13 +2790,14 @@ async function main() {
     process.stdout.write(`${c.yellow}💼 Análise de negócio — enviando para LLM...${c.reset}`);
     let businessReport;
     try {
-      const prompt = buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace);
+      const promptData = businessPromptData;
+      const prompt = promptData.prompt;
       businessReport = await callClaude(prompt);
       businessReport = await ensureEvidenceBasedReport({
         mode: 'business',
         report: businessReport,
         basePrompt: prompt,
-        workspace,
+        workspace: promptData.workspace,
         includePipeline: false,
       });
       console.log(` ${c.green}OK${c.reset}`);
