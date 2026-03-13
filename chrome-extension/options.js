@@ -431,12 +431,32 @@ async function renderWorkspaceDirectoryStatus() {
   });
 }
 
+async function tryAutoDetectJiraBaseUrl() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url) return null;
+    if (!/jira/i.test(tab.url)) return null;
+    return new URL(tab.url).origin;
+  } catch {
+    return null;
+  }
+}
+
 async function loadOptions() {
   const data = await storageGet(DEFAULTS);
   const payload = applyGeneratedProjectEnvFallback({ ...DEFAULTS, ...data });
   fillForm(payload);
   renderStrategySummary(payload);
   await renderWorkspaceDirectoryStatus();
+
+  if (!payload.jiraBaseUrl) {
+    const detected = await tryAutoDetectJiraBaseUrl();
+    if (detected) {
+      document.getElementById('jiraBaseUrl').value = detected;
+      renderStrategySummary(readForm());
+      setStatus(`JIRA_BASE_URL detectada automaticamente: ${detected}. Clique em Salvar para confirmar.`, '');
+    }
+  }
 
   if (payload.projectRootDirLabel) {
     await syncWorkspaceFieldsFromEnv().catch(() => null);

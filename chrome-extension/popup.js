@@ -115,6 +115,24 @@ async function detectIssueFromTab(jiraBaseUrl) {
   }
 }
 
+async function tryAutoSaveJiraBaseUrl() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url) return null;
+    if (!/jira/i.test(tab.url)) return null;
+    const origin = new URL(tab.url).origin;
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.set({ jiraBaseUrl: origin }, () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+    return origin;
+  } catch {
+    return null;
+  }
+}
+
 function parseIssueKeys(value) {
   return [...new Set(String(value || '')
     .split(/[\s,;]+/)
@@ -380,7 +398,19 @@ async function loadDashboard(options = {}) {
   renderCapabilities(response.settings.capabilities);
   renderHistory(response.history);
 
-  const issueKey = await detectIssueFromTab(response.settings.jiraBaseUrl);
+  let jiraBaseUrl = response.settings.jiraBaseUrl;
+
+  if (!jiraBaseUrl) {
+    const detected = await tryAutoSaveJiraBaseUrl();
+    if (detected) {
+      jiraBaseUrl = detected;
+      response.settings.jiraBaseUrl = detected;
+      response.settings.ready = true;
+      renderSettingsSummary(response.settings);
+    }
+  }
+
+  const issueKey = await detectIssueFromTab(jiraBaseUrl);
   renderDetectedIssue(issueKey);
 
   if (options.preserveStatus) {
