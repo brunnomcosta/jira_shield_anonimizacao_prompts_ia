@@ -1,4 +1,15 @@
-importScripts('vendor/jspdf.umd.min.js', 'shield-core.js', 'pdf.js');
+importScripts(
+  'vendor/jspdf.umd.min.js',
+  'portuguese-common-words.js',
+  'shield-core.js',
+  'pdf.js',
+  'prompt-shared.js',
+  'prompt-templates.js',
+  'prompt-template-diagnostic.js',
+  'generated-project-env.js',
+  'issue-technical-context.js',
+  'local-workspace.js'
+);
 
 const DEFAULTS = {
   jiraBaseUrl: '',
@@ -12,10 +23,33 @@ const DEFAULTS = {
   downloadFolder: 'shield',
   aiProvider: 'gemini',
   aiAction: 'copy-and-open',
+  projectRootDirLabel: '',
+  workspaceErpBackendDirLabel: '',
+  workspaceMobileFrontendDirLabel: '',
+  workspaceErpIncludeDirLabel: '',
   activePromptTemplateId: 'documentation',
   promptTemplateOverrides: {},
   promptTemplateAdditions: {},
 };
+
+const GENERATED_PROJECT_ENV_META = (globalThis.SHIELD && SHIELD.generatedProjectEnv) || {};
+const GENERATED_PROJECT_ENV = GENERATED_PROJECT_ENV_META.values || {};
+Object.assign(DEFAULTS, {
+  projectRootDirLabel: GENERATED_PROJECT_ENV_META.projectRootDir || DEFAULTS.projectRootDirLabel,
+  workspaceErpBackendDirLabel: GENERATED_PROJECT_ENV.WORKSPACE_ERP_BACKEND_DIR || DEFAULTS.workspaceErpBackendDirLabel,
+  workspaceMobileFrontendDirLabel: GENERATED_PROJECT_ENV.WORKSPACE_MOBILE_FRONTEND_DIR || DEFAULTS.workspaceMobileFrontendDirLabel,
+  workspaceErpIncludeDirLabel: GENERATED_PROJECT_ENV.WORKSPACE_ERP_INCLUDE_DIR || DEFAULTS.workspaceErpIncludeDirLabel,
+});
+
+function applyGeneratedProjectEnvFallback(settings) {
+  return {
+    ...settings,
+    projectRootDirLabel: settings.projectRootDirLabel || GENERATED_PROJECT_ENV_META.projectRootDir || '',
+    workspaceErpBackendDirLabel: settings.workspaceErpBackendDirLabel || GENERATED_PROJECT_ENV.WORKSPACE_ERP_BACKEND_DIR || '',
+    workspaceMobileFrontendDirLabel: settings.workspaceMobileFrontendDirLabel || GENERATED_PROJECT_ENV.WORKSPACE_MOBILE_FRONTEND_DIR || '',
+    workspaceErpIncludeDirLabel: settings.workspaceErpIncludeDirLabel || GENERATED_PROJECT_ENV.WORKSPACE_ERP_INCLUDE_DIR || '',
+  };
+}
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -83,7 +117,7 @@ function executeScript(options) {
 
 async function getSettings() {
   const stored = await storageGet(DEFAULTS);
-  return { ...DEFAULTS, ...stored };
+  return applyGeneratedProjectEnvFallback({ ...DEFAULTS, ...stored });
 }
 
 function sanitizeBaseUrl(url) {
@@ -158,7 +192,8 @@ function buildCapabilities(settings) {
     'fila de multiplas issue keys',
     'historico local das exportacoes',
     'templates editaveis de prompt para LLM',
-    'prompt de documentacao e prompt diagnostico',
+    'prompt de documentacao, prompt diagnostico e prompt diagnostico + contexto fontes',
+    'sincronizacao opcional com .env do projeto local',
     settings.aiAction === 'copy-only'
       ? 'prompt de IA copiado para a area de transferencia'
       : 'prompt de IA copiado com abertura automatica da IA favorita',
@@ -192,7 +227,9 @@ async function fetchIssue(issueKey, settings) {
     `comment,created,updated,issuetype,project,${zdField},` +
     `customfield_29200,customfield_29201,customfield_29202,` +
     `labels,components,fixVersions,versions,issuelinks,subtasks,parent,attachment,` +
-    `customfield_10014,customfield_10008`;
+    `customfield_10014,customfield_10008,` +
+    `customfield_11078,customfield_11069,` +
+    `customfield_11071,customfield_11085,customfield_11053,customfield_11038`;
 
   const { response, body } = await fetchText(url, {
     method: 'GET',
@@ -391,9 +428,12 @@ async function fetchZendeskViaTab(issueKey, settings) {
   return null;
 }
 
-function buildMetadata(issueKey, issue, settings) {
+function buildMetadata(issueKey, issue, zendeskData, settings, technicalContextOverride = null) {
   const fields = issue.fields || {};
   const zdField = settings.zendeskJiraField || 'customfield_11086';
+  const technicalContext = technicalContextOverride || (SHIELD.issueTechnicalContext
+    ? SHIELD.issueTechnicalContext.extractIssueTechnicalContext(issue, zendeskData)
+    : null);
 
   let sprint = null;
   const sprintRaw = fields.customfield_10014;
@@ -450,11 +490,14 @@ function buildMetadata(issueKey, issue, settings) {
     } : null,
     sprint,
     epicKey: fields.customfield_10008 || null,
+    rotina:  fields.customfield_11078 && fields.customfield_11078.value ? fields.customfield_11078.value : null,
+    modulo:  fields.customfield_11069 && fields.customfield_11069.value ? fields.customfield_11069.value : null,
     attachmentNames: (fields.attachment || []).map((item) => item.filename),
     commentCount: fields.comment
       ? (typeof fields.comment.total === 'number' ? fields.comment.total : ((fields.comment.comments || []).length))
       : 0,
     zendeskTicketId,
+    technicalContext,
   });
 }
 
@@ -498,6 +541,12 @@ function describeZendeskStatus(mode, ticketId, zendeskData) {
 function buildAnonymizedText(anonIssue) {
   const f = anonIssue.fields || {};
   const lines = [];
+  const technicalContextText = SHIELD.issueTechnicalContext
+    ? SHIELD.issueTechnicalContext.buildTechnicalContextTextSection(
+      anonIssue.technicalContext || f.technicalContext || null,
+      { includeHeading: true, includeNote: true }
+    )
+    : '';
   if (f.summary) lines.push(`RESUMO: ${f.summary}`);
   if (f.status && f.status.name) lines.push(`STATUS: ${f.status.name}`);
   if (f.priority && f.priority.name) lines.push(`PRIORIDADE: ${f.priority.name}`);
@@ -518,6 +567,10 @@ function buildAnonymizedText(anonIssue) {
       lines.push(c.body || '');
     });
   }
+  if (technicalContextText) {
+    lines.push('');
+    lines.push(technicalContextText);
+  }
   return lines.join('\n');
 }
 
@@ -527,6 +580,12 @@ function buildAnonymizedPromptText(anonIssue) {
   const zendeskComments = f.zdComments || [];
   const lines = [];
   const history = [];
+  const technicalContextText = SHIELD.issueTechnicalContext
+    ? SHIELD.issueTechnicalContext.buildTechnicalContextTextSection(
+      anonIssue.technicalContext || f.technicalContext || null,
+      { includeHeading: true, includeNote: true }
+    )
+    : '';
 
   function formatDate(value) {
     if (!value) return '';
@@ -596,7 +655,80 @@ function buildAnonymizedPromptText(anonIssue) {
     });
   }
 
+  if (technicalContextText) {
+    lines.push('');
+    lines.push(technicalContextText);
+  }
+
   return lines.join('\n');
+}
+
+function buildWorkspacePromptPayload(workspace) {
+  return workspace && workspace.promptContext
+    ? workspace.promptContext
+    : '## Fontes locais do plugin\n- Nenhum contexto local disponivel.\n';
+}
+
+function countWorkspaceSnippetFiles(workspace) {
+  return (workspace && workspace.backend ? workspace.backend.length : 0)
+    + (workspace && workspace.frontend ? workspace.frontend.length : 0);
+}
+
+function buildRenderedPrompt(templateId, issueKey, anonymizedText, workspace, settings) {
+  if (!SHIELD.prompts || typeof SHIELD.prompts.renderPrompt !== 'function') {
+    throw new Error('Os templates de prompt do SHIELD nao foram carregados no service worker.');
+  }
+
+  return SHIELD.prompts.renderPrompt(templateId, {
+    issueKey,
+    anonymizedText: anonymizedText || '(conteudo nao disponivel)',
+    workspaceContext: buildWorkspacePromptPayload(workspace),
+  }, settings || {}).prompt;
+}
+
+function buildWorkspaceSourcesRequiredError(workspace, settings) {
+  const messages = [
+    'O Prompt Diagnostico + Contexto Fontes exige pelo menos um trecho real de codigo anexado ao prompt.',
+  ];
+
+  const hasBackendEnv = !!(settings && settings.workspaceErpBackendDirLabel);
+  const hasFrontendEnv = !!(settings && settings.workspaceMobileFrontendDirLabel);
+  const backendConfigured = !!(workspace && workspace.backendStatus && workspace.backendStatus.configured);
+  const frontendConfigured = !!(workspace && workspace.frontendStatus && workspace.frontendStatus.configured);
+  const backendStatus = workspace && workspace.backendStatus ? workspace.backendStatus.status : 'missing';
+  const frontendStatus = workspace && workspace.frontendStatus ? workspace.frontendStatus.status : 'missing';
+  const frontendEnabled = !!(workspace && workspace.frontendContext && workspace.frontendContext.enabled);
+
+  if (!hasBackendEnv && !hasFrontendEnv) {
+    messages.push('Preencha WORKSPACE_ERP_BACKEND_DIR e, se aplicavel, WORKSPACE_MOBILE_FRONTEND_DIR nas opcoes do plugin ou no .env do projeto.');
+  }
+
+  if (hasBackendEnv && !backendConfigured) {
+    messages.push('O .env ja informa WORKSPACE_ERP_BACKEND_DIR, mas o navegador ainda nao recebeu a permissao de leitura do diretorio ERP. Use "Vincular permissao de leitura" nas opcoes.');
+  } else if (backendStatus === 'prompt') {
+    messages.push('A permissao de leitura do diretorio ERP precisa ser confirmada novamente no navegador.');
+  } else if (backendStatus === 'denied') {
+    messages.push('O navegador negou a leitura do diretorio ERP configurado para o prompt com fontes.');
+  }
+
+  if (frontendEnabled) {
+    if (hasFrontendEnv && !frontendConfigured) {
+      messages.push('O .env ja informa WORKSPACE_MOBILE_FRONTEND_DIR, mas o navegador ainda nao recebeu a permissao de leitura do diretorio mobile.');
+    } else if (frontendStatus === 'prompt') {
+      messages.push('A permissao de leitura do diretorio mobile precisa ser confirmada novamente no navegador.');
+    } else if (frontendStatus === 'denied') {
+      messages.push('O navegador negou a leitura do diretorio mobile configurado para o prompt com fontes.');
+    }
+  } else if (hasFrontendEnv) {
+    messages.push('O front-end mobile foi ignorado porque a issue nao trouxe sinais de app mobile, Minha Producao, celular ou tablet.');
+  }
+
+  if (workspace && Array.isArray(workspace.warnings) && workspace.warnings.length) {
+    workspace.warnings.forEach((warning) => messages.push(warning));
+  }
+
+  messages.push('Sem snippets reais, o plugin nao envia este prompt para evitar a falsa impressao de que houve correlacao com os fontes.');
+  return messages.join(' ');
 }
 
 async function exportSingleIssue(issueKey, mode, settings) {
@@ -611,10 +743,17 @@ async function exportSingleIssue(issueKey, mode, settings) {
     if (!zendeskData) zendeskData = await fetchZendeskViaTab(issueKey, settings);
   }
 
+  const technicalContext = SHIELD.issueTechnicalContext
+    ? SHIELD.issueTechnicalContext.extractIssueTechnicalContext(issue, zendeskData)
+    : null;
+  const safeTechnicalContext = SHIELD.core.sanitizeStructuredData(technicalContext);
   const { anonIssue, summary } = SHIELD.core.anonymizeIssue(issue, zendeskData);
+  anonIssue.technicalContext = safeTechnicalContext;
+  anonIssue.fields = { ...(anonIssue.fields || {}), technicalContext: safeTechnicalContext };
+  const metadata = buildMetadata(issueKey, issue, zendeskData, settings, technicalContext);
   const pdfBuffer = SHIELD.pdf.generatePDF(anonIssue);
   const anonymizedText = buildAnonymizedPromptText(anonIssue);
-  const metadata = buildMetadata(issueKey, issue, settings);
+  const safeMetadataTechnicalContext = metadata.technicalContext || null;
   const issueSummary = (anonIssue.fields && anonIssue.fields.summary) || '';
   const folder = normalizeDownloadFolder(settings.downloadFolder);
   const pdfFilename = `${issueKey}_LGPD_anonimizado.pdf`;
@@ -664,6 +803,7 @@ async function exportSingleIssue(issueKey, mode, settings) {
     pdfDownloadId,
     metadataDownloadId,
     anonymizedText,
+    technicalContext: safeMetadataTechnicalContext,
   };
 }
 
@@ -707,6 +847,7 @@ async function handleGenerateAIDoc(message) {
   }
 
   const mode = message.mode === 'jira-only' ? 'jira-only' : 'full';
+  const templateId = message.templateId || 'documentation';
   const results = [];
 
   for (const issueKey of issueKeys) {
@@ -719,12 +860,57 @@ async function handleGenerateAIDoc(message) {
       if (mode !== 'jira-only' && ticketId) {
         zendeskData = await fetchZendeskViaJira(ticketId, issueKey, settings);
         if (!zendeskData) zendeskData = await fetchZendeskViaApi(ticketId, settings);
-        if (!zendeskData) zendeskData = await fetchZendeskViaTab(issueKey, settings);
+        // Prompt de diagnóstico sem fontes não abre aba — evita abrir Chrome desnecessariamente
+        if (!zendeskData && templateId !== 'diagnostic') {
+          zendeskData = await fetchZendeskViaTab(issueKey, settings);
+        }
       }
 
+      const technicalContext = SHIELD.issueTechnicalContext
+        ? SHIELD.issueTechnicalContext.extractIssueTechnicalContext(issue, zendeskData)
+        : null;
+      const safeTechnicalContext = SHIELD.core.sanitizeStructuredData(technicalContext);
       const { anonIssue } = SHIELD.core.anonymizeIssue(issue, zendeskData);
+      anonIssue.technicalContext = safeTechnicalContext;
+      anonIssue.fields = { ...(anonIssue.fields || {}), technicalContext: safeTechnicalContext };
       const anonymizedText = buildAnonymizedPromptText(anonIssue);
       const issueSummary = (anonIssue.fields && anonIssue.fields.summary) || '';
+      const workspace = templateId === 'diagnostic_with_sources'
+        ? await SHIELD.localWorkspace.collectDiagnosticWorkspaceContext(anonymizedText, technicalContext).catch((error) => ({
+          backend: [],
+          frontend: [],
+          configured: false,
+          technicalContext,
+          technicalCorrelation: null,
+          frontendContext: { enabled: false, hits: [] },
+          warnings: [error.message],
+          promptContext: [
+            SHIELD.issueTechnicalContext
+              ? SHIELD.issueTechnicalContext.buildTechnicalContextPromptSection(
+                SHIELD.core.sanitizeStructuredData(technicalContext),
+                null
+              ).trim()
+              : '## Contexto tecnico extraido da issue\n- Contexto tecnico indisponivel.\n',
+            `## Fontes locais do plugin\n- Falha ao preparar contexto local: ${error.message}\n`,
+          ].join('\n\n'),
+        }))
+        : null;
+      const sourceFiles = countWorkspaceSnippetFiles(workspace);
+
+      if (templateId === 'diagnostic_with_sources' && sourceFiles === 0) {
+        results.push({
+          ok: false,
+          issueKey,
+          issueSummary,
+          mode,
+          ticketId,
+          workspace,
+          error: buildWorkspaceSourcesRequiredError(workspace, settings),
+        });
+        continue;
+      }
+
+      const renderedPrompt = buildRenderedPrompt(templateId, issueKey, anonymizedText, workspace, settings);
 
       results.push({
         ok: true,
@@ -733,7 +919,10 @@ async function handleGenerateAIDoc(message) {
         mode,
         ticketId,
         anonymizedText,
+        technicalContext,
         zendeskSource: zendeskData ? zendeskData._source : null,
+        workspace,
+        renderedPrompt,
       });
     } catch (error) {
       results.push({ ok: false, issueKey, mode, error: error.message });
@@ -788,6 +977,11 @@ async function handleExportIssues(message) {
 
 async function getSettingsSummary() {
   const settings = await getSettings();
+  const workspaceStatuses = await SHIELD.localWorkspace.getDirectoryStatuses().catch(() => ({
+    erpBackend: null,
+    mobileFrontend: null,
+  }));
+  const projectRootStatus = await SHIELD.localWorkspace.getProjectRootStatus().catch(() => null);
   const jiraBaseUrl = sanitizeBaseUrl(settings.jiraBaseUrl);
   const authMode = getAuthMode(settings);
   const zendeskMode = getZendeskMode(settings);
@@ -816,6 +1010,12 @@ async function getSettingsSummary() {
     aiProviderLabel: getAIProviderLabel(settings.aiProvider),
     aiAction: settings.aiAction || 'copy-and-open',
     aiActionLabel: getAIActionLabel(settings.aiAction),
+    projectRootDirLabel: settings.projectRootDirLabel || '',
+    workspaceErpBackendDirLabel: settings.workspaceErpBackendDirLabel || '',
+    workspaceMobileFrontendDirLabel: settings.workspaceMobileFrontendDirLabel || '',
+    workspaceErpIncludeDirLabel: settings.workspaceErpIncludeDirLabel || '',
+    projectRootPermission: projectRootStatus ? projectRootStatus.permission : 'missing',
+    workspaceStatuses,
     activePromptTemplateId: settings.activePromptTemplateId || 'documentation',
     promptTemplateOverrides: settings.promptTemplateOverrides || {},
     promptTemplateAdditions: settings.promptTemplateAdditions || {},

@@ -3,6 +3,8 @@
  * Detecta nomes de pessoas e empresas por proximidade com palavras-gatilho.
  */
 
+import { PORTUGUESE_COMMON_WORDS } from './portugueseCommonWords.js';
+
 const GATILHOS_EMPRESA = [
   'empresa', 'client[ea]', 'fornecedor[a]?', 'parceiro[a]?',
   'contratante', 'contratad[ao]', 'prestador[a]?', 'representante',
@@ -113,7 +115,14 @@ const GATILHOS_PESSOA = [
 // Captura nomes com preposições: "João da Silva", "Maria dos Santos", "Ana de Oliveira e Souza"
 const NOME_PROPRIO =
   '([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]+(?:(?:\\s(?:de|da|do|dos|das|e))?\\s[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]+){0,4})';
-const ARTIGO = '(?:a|o|as|os|da|do|das|dos|de|um|uma)?\\s*';
+const ARTIGO = '(?:(?:a|o|as|os|da|do|das|dos|de|um|uma)\\b\\s*)?';
+
+function normalizeStopwordToken(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
 
 // Palavras comuns em português/inglês que NÃO são nomes próprios,
 // mas podem ser capturadas após gatilhos (ex: "analista sobre o escopo")
@@ -345,7 +354,54 @@ const STOPWORDS_PESSOA = new Set([
   'evento', 'eventos', 'ocorrência', 'ocorrências',
   'instância', 'instâncias', 'sessão', 'sessões',
   'operação', 'operações', 'transação', 'transações',
-]);
+  // Metrologia e inspecao da qualidade
+  'metrologia', 'qualidade',
+  'inspecao', 'inspecoes', 'inspeção', 'inspeções',
+  'ensaio', 'ensaios',
+  'roteiro', 'roteiros',
+  'laboratorio', 'laboratorios', 'laboratório', 'laboratórios',
+  'peca', 'pecas', 'peça', 'peças',
+  'caracteristica', 'caracteristicas', 'característica', 'características',
+  'medida', 'medidas',
+  'medicao', 'medicoes', 'medição', 'medições',
+  'amostra', 'amostras',
+  'operacao', 'operacoes',
+].map(normalizeStopwordToken));
+
+const PESSOA_CONECTORES = new Set(['de', 'da', 'do', 'dos', 'das', 'e']);
+const STOPWORDS_EMPRESA = new Set([
+  ...STOPWORDS_PESSOA,
+  ...PORTUGUESE_COMMON_WORDS,
+  'empresa', 'empresas',
+  'cliente', 'clientes',
+  'fornecedor', 'fornecedores',
+  'parceiro', 'parceiros',
+  'contratante', 'contratantes',
+  'contratada', 'contratado', 'contratadas', 'contratados',
+  'prestador', 'prestadores',
+  'representante', 'representantes',
+  'filial', 'filiais',
+  'subsidiaria', 'subsidiarias',
+  'organizacao', 'organizacoes',
+  'instituicao', 'instituicoes',
+  'fundacao', 'fundacoes',
+  'associacao', 'associacoes',
+  'cooperativa', 'cooperativas',
+  'holding', 'holdings',
+  'grupo', 'grupos',
+  'plataforma', 'plataformas',
+  'sistema', 'sistemas',
+  'portal', 'portais',
+  'produto', 'produtos',
+  'servico', 'servicos',
+  'solucao', 'solucoes',
+  'processo', 'processos',
+  'rotina', 'rotinas',
+  'resultado', 'resultados',
+  'operacao', 'operacoes',
+  'qualidade', 'laboratorio', 'laboratorios',
+].map(normalizeStopwordToken));
+const EMPRESA_CONECTORES = new Set(['de', 'da', 'do', 'dos', 'das', 'e', '&']);
 
 // Valida se o nome capturado é realmente um nome próprio (não uma palavra comum)
 function isValidPessoaName(nome) {
@@ -353,12 +409,122 @@ function isValidPessoaName(nome) {
   // Deve começar com maiúscula E ter segunda letra minúscula (exclui siglas tipo APP, HPE, TI)
   if (!/^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]/.test(nome)) return false;
   // Não deve ser uma palavra comum da lista
-  return !STOPWORDS_PESSOA.has(nome.toLowerCase());
+  return !STOPWORDS_PESSOA.has(normalizeStopwordToken(nome));
+}
+
+function getPessoaNameCandidate(nome) {
+  if (!nome || String(nome).trim().length < 3) return null;
+
+  const tokens = String(nome)
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^A-Za-zÀ-ÿ]+|[^A-Za-zÀ-ÿ]+$/g, ''))
+    .filter(Boolean);
+
+  const validTokens = [];
+
+  for (const token of tokens) {
+    const normalizedToken = normalizeStopwordToken(token);
+
+    if (!validTokens.length) {
+      if (!/^\p{Lu}\p{Ll}/u.test(token)) return null;
+      if (STOPWORDS_PESSOA.has(normalizedToken)) return null;
+      validTokens.push(token);
+      continue;
+    }
+
+    if (PESSOA_CONECTORES.has(normalizedToken)) {
+      validTokens.push(normalizedToken);
+      continue;
+    }
+
+    if (/^\p{Lu}\p{Ll}/u.test(token)) {
+      validTokens.push(token);
+      continue;
+    }
+
+    break;
+  }
+
+  return validTokens.length ? validTokens.join(' ') : null;
+}
+
+function getUppercasePessoaNameCandidate(nome) {
+  if (!nome || String(nome).trim().length < 3) return null;
+
+  const tokens = String(nome)
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^\p{L}'-]+|[^\p{L}'-]+$/gu, ''))
+    .filter(Boolean);
+
+  const validTokens = [];
+  let significantTokens = 0;
+
+  for (const token of tokens) {
+    const normalizedToken = normalizeStopwordToken(token);
+
+    if (PESSOA_CONECTORES.has(normalizedToken)) {
+      if (significantTokens) validTokens.push(token);
+      continue;
+    }
+
+    if (!/^\p{Lu}[\p{Lu}'-]*$/u.test(token)) break;
+    if (STOPWORDS_PESSOA.has(normalizedToken)) break;
+
+    validTokens.push(token);
+    significantTokens += 1;
+  }
+
+  while (validTokens.length && PESSOA_CONECTORES.has(normalizeStopwordToken(validTokens[validTokens.length - 1]))) {
+    validTokens.pop();
+  }
+
+  if (!significantTokens || !validTokens.length) return null;
+  return validTokens.join(' ');
+}
+
+function looksLikeEmpresaToken(token) {
+  return /^\p{Lu}[\p{L}\d&._'-]*$/u.test(token) || /^[A-Z\d&._'-]{2,}$/u.test(token);
+}
+
+function getEmpresaNameCandidate(nome) {
+  if (!nome || String(nome).trim().length < 3) return null;
+
+    const tokens = String(nome)
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^\p{L}\d&._'-]+|[^\p{L}\d&._'-]+$/gu, ''))
+    .filter(Boolean);
+
+  const validTokens = [];
+  const significantTokens = [];
+
+  for (const token of tokens) {
+    const normalizedToken = normalizeStopwordToken(token);
+
+    if (EMPRESA_CONECTORES.has(normalizedToken)) {
+      if (validTokens.length) validTokens.push(normalizedToken === '&' ? '&' : normalizedToken);
+      continue;
+    }
+
+    if (!looksLikeEmpresaToken(token)) {
+      break;
+    }
+
+    validTokens.push(token);
+    significantTokens.push(normalizedToken);
+  }
+
+  if (!significantTokens.length) return null;
+  if (significantTokens.length === 1 && STOPWORDS_EMPRESA.has(significantTokens[0])) return null;
+
+  return validTokens.length ? validTokens.join(' ') : null;
 }
 
 const PATTERN_SUFIXO_JURIDICO = new RegExp(
   NOME_PROPRIO +
-    '\\s*(?:S\\.?A\\.?|Ltda\\.?|EIRELI|ME|EPP|SS|MEI|SCP|S\\/A|SA|Group|Corp|Holdings|' +
+    '\\s+(?:S\\.?A\\.?|Ltda\\.?|EIRELI|ME|EPP|SS|MEI|SCP|S\\/A|SA|Group|Corp|Holdings|' +
     'Servi[çc]os|Serviços|Soluções|Solu[çc]oes|Sistemas|Tecnologia|Ind[uú]stria|' +
     'Farmac[eê]utica|Distribuidora|Com[eé]rcio|Consultoria|Assessoria|Engenharia|' +
     'Constru[çc]ões|Empreendimentos|Investimentos|Participa[çc]ões|Transportes|' +
@@ -373,6 +539,16 @@ function buildPattern(gatilhos) {
 
 const PATTERN_EMPRESA = buildPattern(GATILHOS_EMPRESA);
 const PATTERN_PESSOA  = buildPattern(GATILHOS_PESSOA);
+const NOME_SIMPLES = '[\\p{Lu}][\\p{L}]{1,}(?:(?:[ \\t](?:de|da|do|dos|das|e))?[ \\t][\\p{Lu}][\\p{L}]{1,})*';
+const NOME_CLIENTE_CAPS = '([\\p{Lu}][\\p{Lu}\'-]{1,}(?:(?:[ \\t](?:DE|DA|DO|DOS|DAS|E))?[ \\t][\\p{Lu}][\\p{Lu}\'-]{1,}){0,4})';
+const PATTERN_LABELED_PERSON = new RegExp(
+  `\\b(?:triagem|triador(?:a)?|triagista|analista|analise|revisao|aprovacao|responsavel|solicitante)[ \\t]*:[ \\t]*(${NOME_SIMPLES})(?:[ \\t]*[/|][ \\t]*(${NOME_SIMPLES}))?`,
+  'giu'
+);
+const PATTERN_CLIENTE_CAPS_PERSON = new RegExp(
+  `\\b(?:nome[ \\t]+)?d[oa]s?[ \\t]+client[ea][ \\t]*(?::|=|[-–—]|eh|é)?[ \\t]*${NOME_CLIENTE_CAPS}`,
+  'gu'
+);
 
 export function extractContextualEntities(text) {
   const empresas = new Set();
@@ -381,20 +557,41 @@ export function extractContextualEntities(text) {
 
   PATTERN_EMPRESA.lastIndex = 0;
   for (const m of text.matchAll(PATTERN_EMPRESA)) {
-    const nome = m[m.length - 1]?.trim();
-    if (nome && nome.length > 2) empresas.add(nome);
+    const nome = getEmpresaNameCandidate(m[m.length - 1]?.trim());
+    if (nome) empresas.add(nome);
   }
 
   PATTERN_SUFIXO_JURIDICO.lastIndex = 0;
   for (const m of text.matchAll(PATTERN_SUFIXO_JURIDICO)) {
-    const nome = m[1]?.trim();
+    const nome = getEmpresaNameCandidate(m[1]?.trim());
     if (nome) empresas.add(nome);
   }
 
   PATTERN_PESSOA.lastIndex = 0;
   for (const m of text.matchAll(PATTERN_PESSOA)) {
-    const nome = m[m.length - 1]?.trim();
-    if (isValidPessoaName(nome)) pessoas.add(nome);
+    const nome = getPessoaNameCandidate(m[m.length - 1]?.trim());
+    if (nome) pessoas.add(nome);
+  }
+
+  PATTERN_LABELED_PERSON.lastIndex = 0;
+  for (const m of text.matchAll(PATTERN_LABELED_PERSON)) {
+    const nome1 = getPessoaNameCandidate(m[1]?.trim());
+    const nome2 = getPessoaNameCandidate(m[2]?.trim());
+    if (nome1) pessoas.add(nome1);
+    if (nome2) pessoas.add(nome2);
+  }
+
+  PATTERN_CLIENTE_CAPS_PERSON.lastIndex = 0;
+  for (const m of text.matchAll(PATTERN_CLIENTE_CAPS_PERSON)) {
+    const nome = getUppercasePessoaNameCandidate(m[1]?.trim());
+    if (nome) pessoas.add(nome);
+  }
+
+  const pessoasNormalizadas = new Set([...pessoas].map((nome) => normalizeStopwordToken(nome)));
+  for (const nome of [...empresas]) {
+    if (pessoasNormalizadas.has(normalizeStopwordToken(nome))) {
+      empresas.delete(nome);
+    }
   }
 
   return { empresas, pessoas };

@@ -10,6 +10,7 @@ const state = {
   history: [],
   detectedIssue: null,
   exportResults: [],
+  pendingDiagnosticPayload: null,
 };
 
 function getAIProviderLabel(value) {
@@ -77,6 +78,11 @@ function setBusy(busy) {
   document.getElementById('run-export').disabled = busy;
   document.getElementById('run-ai-doc').disabled = busy;
   document.getElementById('run-ai-diagnostic').disabled = busy;
+  document.getElementById('run-ai-diagnostic-sources').disabled = busy;
+  const confirmBtn = document.getElementById('source-preview-confirm');
+  const cancelBtn = document.getElementById('source-preview-cancel');
+  if (confirmBtn) confirmBtn.disabled = busy;
+  if (cancelBtn) cancelBtn.disabled = busy;
   document.querySelectorAll('input[name="mode"]').forEach((node) => {
     node.disabled = busy;
   });
@@ -130,6 +136,7 @@ function renderCapabilities(capabilities) {
 
 function renderSettingsSummary(summary) {
   const node = document.getElementById('settings-summary');
+  if (!node) return;
   if (!summary) {
     node.innerHTML = '';
     return;
@@ -168,6 +175,30 @@ function renderSettingsSummary(summary) {
       copy: promptTemplate.copy,
       tone: '',
     },
+    {
+      label: 'Projeto local',
+      value: summary.projectRootDirLabel || 'Nao vinculado',
+      copy: 'Sincroniza WORKSPACE_* com o .env do projeto',
+      tone: summary.projectRootDirLabel ? '' : 'warn',
+    },
+    {
+      label: 'ERP do .env',
+      value: summary.workspaceErpBackendDirLabel || 'Nao configurado',
+      copy: 'Back-end local elegivel para Prompt Diagnostico',
+      tone: summary.workspaceErpBackendDirLabel ? '' : 'warn',
+    },
+    {
+      label: 'Mobile do .env',
+      value: summary.workspaceMobileFrontendDirLabel || 'Nao configurado',
+      copy: 'Front-end local so entra com contexto mobile',
+      tone: summary.workspaceMobileFrontendDirLabel ? '' : 'warn',
+    },
+    {
+      label: 'Includes do .env',
+      value: summary.workspaceErpIncludeDirLabel || 'Nao configurado',
+      copy: 'Mantido em sincronia com WORKSPACE_ERP_INCLUDE_DIR',
+      tone: summary.workspaceErpIncludeDirLabel ? '' : 'warn',
+    },
   ];
 
   node.innerHTML = cards.map((card) => `
@@ -200,7 +231,7 @@ function renderDetectedIssue(issueKey) {
 }
 
 function describeZendeskStatus(item) {
-  if (item.mode === 'jira-only') return 'Modo Jira only';
+  if (item.mode === 'jira-only') return 'Modo Somente JIRA';
   if (item.zendeskSource === 'jira-proxy') return 'Zendesk via proxy Jira';
   if (item.zendeskSource === 'zendesk-api') return 'Zendesk via API direta';
   if (item.zendeskSource === 'jira-tab-scrape') return 'Zendesk via aba da issue';
@@ -210,9 +241,16 @@ function describeZendeskStatus(item) {
 }
 
 function buildAIPrompt(templateId, item) {
+  if (item && item.renderedPrompt) {
+    return item.renderedPrompt;
+  }
+
   const renderedPrompt = SHIELD.prompts.renderPrompt(templateId, {
     issueKey: item.issueKey,
     anonymizedText: item.anonymizedText || '(conteudo nao disponivel)',
+    workspaceContext: item.workspace && item.workspace.promptContext
+      ? item.workspace.promptContext
+      : '## Fontes locais do plugin\n- Nenhum contexto local disponivel.\n',
   }, state.settings || {});
 
   return renderedPrompt.prompt;
@@ -246,7 +284,7 @@ function renderResults(response) {
   if (response.summary) {
     summary.textContent =
       `Sucesso: ${response.summary.success} | Falha: ${response.summary.failed} | ` +
-      `Com Zendesk: ${response.summary.withZendesk} | Jira only: ${response.summary.jiraOnly}`;
+      `Com Zendesk: ${response.summary.withZendesk} | Somente JIRA: ${response.summary.jiraOnly}`;
   }
 
   results.forEach((item, index) => {
@@ -258,12 +296,13 @@ function renderResults(response) {
         <div class="result-actions">
           <button class="ghost analyze-ai-btn" data-index="${index}" data-template-id="documentation" type="button">${escapeHtml(getAIActionButtonLabel('documentation'))}</button>
           <button class="ghost analyze-ai-btn" data-index="${index}" data-template-id="diagnostic" type="button">${escapeHtml(getAIActionButtonLabel('diagnostic'))}</button>
+          <button class="ghost analyze-ai-btn" data-index="${index}" data-template-id="diagnostic_with_sources" type="button">${escapeHtml(getAIActionButtonLabel('diagnostic_with_sources'))}</button>
         </div>
       `;
       card.innerHTML = `
         <div class="row result-head">
           <strong>${escapeHtml(item.issueKey)}</strong>
-          <span class="result-tag">${escapeHtml(item.mode === 'jira-only' ? 'Jira only' : 'Completo')}</span>
+          <span class="result-tag">${escapeHtml(item.mode === 'jira-only' ? 'Somente JIRA' : 'Completo')}</span>
         </div>
         <div class="result-title">${escapeHtml(item.issueSummary || '(sem resumo)')}</div>
         <div class="result-meta">${escapeHtml(describeZendeskStatus(item))}</div>
@@ -307,7 +346,7 @@ function renderHistory(entries) {
     const when = entry.timestamp ? new Date(entry.timestamp).toLocaleString('pt-BR') : '-';
     const source = entry.zendeskSource
       ? `Zendesk: ${entry.zendeskSource}`
-      : (entry.mode === 'jira-only' ? 'Modo Jira only' : 'Sem Zendesk');
+      : (entry.mode === 'jira-only' ? 'Modo Somente JIRA' : 'Sem Zendesk');
 
     card.innerHTML = `
       <div class="row result-head">
@@ -371,7 +410,7 @@ async function runExport() {
   }
 
   setBusy(true);
-  setStatus(`Executando exportacao de ${keys.length} issue(s) em modo ${mode === 'jira-only' ? 'Jira only' : 'Completo'}...`, '');
+  setStatus(`Executando exportacao de ${keys.length} issue(s) em modo ${mode === 'jira-only' ? 'Somente JIRA' : 'Completo'}...`, '');
   renderResults({ results: [] });
 
   try {
@@ -418,12 +457,22 @@ function renderPromptResults(response, templateId) {
 
     if (item.ok) {
       const aiButtonLabel = getAIActionButtonLabel(templateId);
+      const diagnosticMeta = templateId === 'diagnostic_with_sources' && item.workspace
+        ? `<div class="result-meta">${escapeHtml(
+          item.workspace.backend.length || item.workspace.frontend.length
+            ? `Contexto local: ERP ${item.workspace.backend.length} arquivo(s), mobile ${item.workspace.frontend.length} arquivo(s)`
+            : item.workspace.frontendContext && !item.workspace.frontendContext.enabled
+              ? 'Contexto local: mobile ignorado por falta de sinais de app mobile no ticket'
+              : 'Contexto local: nenhum trecho local anexado'
+        )}</div>`
+        : '';
       card.innerHTML = `
         <div class="row result-head">
           <strong>${escapeHtml(item.issueKey)}</strong>
-          <span class="result-tag">${escapeHtml(item.mode === 'jira-only' ? 'Jira only' : 'Completo')}</span>
+          <span class="result-tag">${escapeHtml(item.mode === 'jira-only' ? 'Somente JIRA' : 'Completo')}</span>
         </div>
         <div class="result-title">${escapeHtml(item.issueSummary || '(sem resumo)')}</div>
+        ${diagnosticMeta}
         <div class="result-actions">
           <button class="ghost analyze-ai-btn" data-index="${index}" data-template-id="${escapeHtml(templateId)}" type="button">${escapeHtml(aiButtonLabel)}</button>
         </div>
@@ -469,6 +518,7 @@ async function runPromptFlow(templateId) {
       type: 'preparePromptPayload',
       issueKeys: keys,
       mode,
+      templateId,
     });
 
     if (!response.ok && (!response.results || !response.results.length)) {
@@ -488,13 +538,230 @@ async function runPromptFlow(templateId) {
       renderPromptResults(response, templateId);
       setStatus(`${successful.length} issues prontas para ${promptLabel}. ${actionText}`, '');
     } else {
-      setStatus('Nenhuma issue processada com sucesso.', 'error');
+      const firstError = (response.results || []).find((item) => !item.ok && item.error);
+      setStatus(firstError ? firstError.error : 'Nenhuma issue processada com sucesso.', 'error');
       renderPromptResults(response, templateId);
     }
   } catch (error) {
     setStatus(error.message, 'error');
   } finally {
     setBusy(false);
+  }
+}
+
+function truncateSnippet(content, maxLines) {
+  const lines = String(content || '').split('\n');
+  const limit = maxLines || 4;
+  return {
+    text: lines.slice(0, limit).join('\n'),
+    truncated: lines.length > limit,
+  };
+}
+
+function formatLineRangesDisplay(lineRanges) {
+  if (!lineRanges || !lineRanges.length) return 'linhas desconhecidas';
+  return 'linhas ' + lineRanges.map((r) => `${r.start}-${r.end}`).join(', ');
+}
+
+function buildSourceFileCard(file, kind) {
+  const card = document.createElement('div');
+  card.className = `source-file-card ${kind}`;
+
+  const lineInfo = formatLineRangesDisplay(file.lineRanges);
+  const charCount = String(file.content || '').length;
+  const snippet = truncateSnippet(file.content, 4);
+
+  const nameDiv = document.createElement('div');
+  nameDiv.className = 'source-file-name';
+  nameDiv.textContent = file.rel;
+
+  const metaDiv = document.createElement('div');
+  metaDiv.className = 'source-file-meta';
+  metaDiv.textContent = `${lineInfo} · ${charCount} car. · ${file.totalLines} linhas no arquivo`;
+  if (snippet.truncated) metaDiv.textContent += ' · trecho truncado para exibição';
+
+  const pre = document.createElement('pre');
+  pre.className = 'source-file-snippet';
+  pre.textContent = snippet.text;
+
+  card.appendChild(nameDiv);
+  card.appendChild(metaDiv);
+  card.appendChild(pre);
+  return card;
+}
+
+function hideSourcePreview() {
+  const panel = document.getElementById('source-preview');
+  panel.hidden = true;
+  document.getElementById('source-preview-body').innerHTML = '';
+  document.getElementById('source-preview-badge').textContent = '';
+  state.pendingDiagnosticPayload = null;
+}
+
+function renderSourcePreview(workspace) {
+  const panel = document.getElementById('source-preview');
+  const body = document.getElementById('source-preview-body');
+  const badge = document.getElementById('source-preview-badge');
+
+  body.innerHTML = '';
+
+  const backendFiles = (workspace && workspace.backend) || [];
+  const frontendFiles = (workspace && workspace.frontend) || [];
+  const warnings = (workspace && workspace.warnings) || [];
+  const frontendContext = workspace && workspace.frontendContext;
+  const backendStatus = workspace && workspace.backendStatus;
+  const frontendStatus = workspace && workspace.frontendStatus;
+
+  const totalFiles = backendFiles.length + frontendFiles.length;
+  badge.textContent = totalFiles === 0 ? 'Nenhum arquivo' : `${totalFiles} arquivo(s)`;
+
+  warnings.forEach((warning) => {
+    const el = document.createElement('div');
+    el.className = 'source-preview-warn';
+    el.textContent = warning;
+    body.appendChild(el);
+  });
+
+  if (backendStatus && backendStatus.configured) {
+    const label = document.createElement('div');
+    label.className = 'source-preview-section-label';
+    label.textContent = `ERP Back-end${backendStatus.rootLabel ? ' — ' + backendStatus.rootLabel : ''}`;
+    body.appendChild(label);
+
+    if (backendFiles.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'source-preview-empty';
+      empty.textContent = backendStatus.status === 'granted'
+        ? 'Nenhum trecho relevante encontrado no ERP para esta issue.'
+        : `Sem acesso ao diretório ERP (status: ${backendStatus.status}).`;
+      body.appendChild(empty);
+    } else {
+      backendFiles.forEach((f) => body.appendChild(buildSourceFileCard(f, 'backend')));
+    }
+  }
+
+  if (frontendStatus && frontendStatus.configured) {
+    const label = document.createElement('div');
+    label.className = 'source-preview-section-label';
+
+    if (frontendContext && !frontendContext.enabled) {
+      label.textContent = 'App Mobile — ignorado (sem sinais de contexto mobile no ticket)';
+      body.appendChild(label);
+      const info = document.createElement('div');
+      info.className = 'source-preview-empty';
+      info.textContent = 'O front-end mobile não será incluído porque a issue não menciona mobile, celular, app, tablet, Android ou iOS.';
+      body.appendChild(info);
+    } else {
+      label.textContent = `App Mobile${frontendStatus.rootLabel ? ' — ' + frontendStatus.rootLabel : ''}`;
+      body.appendChild(label);
+
+      if (frontendContext && frontendContext.hits && frontendContext.hits.length) {
+        const hint = document.createElement('div');
+        hint.className = 'source-file-meta';
+        hint.textContent = `Sinais detectados: ${frontendContext.hits.join(', ')}`;
+        body.appendChild(hint);
+      }
+
+      if (frontendFiles.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'source-preview-empty';
+        empty.textContent = 'Nenhum trecho relevante encontrado no mobile para esta issue.';
+        body.appendChild(empty);
+      } else {
+        frontendFiles.forEach((f) => body.appendChild(buildSourceFileCard(f, 'frontend')));
+      }
+    }
+  }
+
+  if (totalFiles === 0 && warnings.length === 0
+      && (!backendStatus || !backendStatus.configured)
+      && (!frontendStatus || !frontendStatus.configured)) {
+    const empty = document.createElement('div');
+    empty.className = 'source-preview-empty';
+    empty.textContent = 'Nenhum trecho local encontrado. Configure os diretórios de workspace em Configurar.';
+    body.appendChild(empty);
+  }
+
+  panel.hidden = false;
+}
+
+async function runDiagnosticWithSourcesPreview() {
+  const keys = parseIssueKeys(document.getElementById('issue-keys').value);
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  const templateId = 'diagnostic_with_sources';
+
+  if (!keys.length) {
+    setStatus('Informe ao menos uma issue key.', 'warn');
+    return;
+  }
+
+  if (!state.settings || !state.settings.ready) {
+    setStatus('Configure JIRA_BASE_URL em Configurar antes de usar.', 'warn');
+    return;
+  }
+
+  hideSourcePreview();
+  setBusy(true);
+  setStatus(`Coletando contexto de fontes para ${keys.length} issue(s)...`, '');
+  document.getElementById('result-summary').textContent = '';
+  document.getElementById('results').innerHTML = '';
+
+  try {
+    const response = await sendMessage({
+      type: 'preparePromptPayload',
+      issueKeys: keys,
+      mode,
+      templateId,
+    });
+
+    if (!response.ok && (!response.results || !response.results.length)) {
+      setStatus(response.error || 'Falha ao processar issues.', 'error');
+      return;
+    }
+
+    state.pendingDiagnosticPayload = { response, templateId };
+
+    const firstResult = (response.results || []).find((r) => r.ok) || (response.results || [])[0];
+    const workspace = firstResult && firstResult.workspace;
+
+    renderSourcePreview(workspace);
+
+    const multiNote = keys.length > 1 ? ` (exibindo fontes da 1ª issue de ${keys.length})` : '';
+    setStatus(`Revise as fontes${multiNote} e confirme para gerar o prompt.`, '');
+  } catch (error) {
+    setStatus(error.message, 'error');
+    hideSourcePreview();
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function confirmDiagnosticWithSources() {
+  const pending = state.pendingDiagnosticPayload;
+  if (!pending) return;
+
+  const { response, templateId } = pending;
+  hideSourcePreview();
+
+  try {
+    const successful = (response.results || []).filter((item) => item.ok);
+
+    if (successful.length === 1) {
+      await analyzeWithAI(successful[0], templateId);
+    } else if (successful.length > 1) {
+      const action = (state.settings && state.settings.aiAction) || 'copy-and-open';
+      const actionText = action === 'copy-only'
+        ? `Clique em "${getAIActionButtonLabel(templateId)}" em cada uma.`
+        : `Clique em "${getPromptLabel(templateId)}" em cada uma.`;
+      renderPromptResults(response, templateId);
+      setStatus(`${successful.length} issues prontas para ${getPromptLabel(templateId)}. ${actionText}`, '');
+    } else {
+      const firstError = (response.results || []).find((item) => !item.ok && item.error);
+      setStatus(firstError ? firstError.error : 'Nenhuma issue processada com sucesso.', 'error');
+      renderPromptResults(response, templateId);
+    }
+  } catch (error) {
+    setStatus(error.message, 'error');
   }
 }
 
@@ -521,6 +788,19 @@ document.getElementById('run-ai-doc').addEventListener('click', () => {
 
 document.getElementById('run-ai-diagnostic').addEventListener('click', () => {
   runPromptFlow('diagnostic').catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('run-ai-diagnostic-sources').addEventListener('click', () => {
+  runDiagnosticWithSourcesPreview().catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('source-preview-confirm').addEventListener('click', () => {
+  confirmDiagnosticWithSources().catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('source-preview-cancel').addEventListener('click', () => {
+  hideSourcePreview();
+  setStatus('Operacao cancelada.', '');
 });
 
 document.getElementById('open-options').addEventListener('click', () => chrome.runtime.openOptionsPage());

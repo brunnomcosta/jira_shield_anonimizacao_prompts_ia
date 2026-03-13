@@ -10,10 +10,33 @@ const DEFAULTS = {
   downloadFolder: 'shield',
   aiProvider: 'gemini',
   aiAction: 'copy-and-open',
+  projectRootDirLabel: '',
+  workspaceErpBackendDirLabel: '',
+  workspaceMobileFrontendDirLabel: '',
+  workspaceErpIncludeDirLabel: '',
   activePromptTemplateId: 'documentation',
   promptTemplateOverrides: {},
   promptTemplateAdditions: {},
 };
+
+const GENERATED_PROJECT_ENV_META = (window.SHIELD && SHIELD.generatedProjectEnv) || {};
+const GENERATED_PROJECT_ENV = GENERATED_PROJECT_ENV_META.values || {};
+Object.assign(DEFAULTS, {
+  projectRootDirLabel: GENERATED_PROJECT_ENV_META.projectRootDir || DEFAULTS.projectRootDirLabel,
+  workspaceErpBackendDirLabel: GENERATED_PROJECT_ENV.WORKSPACE_ERP_BACKEND_DIR || DEFAULTS.workspaceErpBackendDirLabel,
+  workspaceMobileFrontendDirLabel: GENERATED_PROJECT_ENV.WORKSPACE_MOBILE_FRONTEND_DIR || DEFAULTS.workspaceMobileFrontendDirLabel,
+  workspaceErpIncludeDirLabel: GENERATED_PROJECT_ENV.WORKSPACE_ERP_INCLUDE_DIR || DEFAULTS.workspaceErpIncludeDirLabel,
+});
+
+function applyGeneratedProjectEnvFallback(payload) {
+  return {
+    ...payload,
+    projectRootDirLabel: payload.projectRootDirLabel || GENERATED_PROJECT_ENV_META.projectRootDir || '',
+    workspaceErpBackendDirLabel: payload.workspaceErpBackendDirLabel || GENERATED_PROJECT_ENV.WORKSPACE_ERP_BACKEND_DIR || '',
+    workspaceMobileFrontendDirLabel: payload.workspaceMobileFrontendDirLabel || GENERATED_PROJECT_ENV.WORKSPACE_MOBILE_FRONTEND_DIR || '',
+    workspaceErpIncludeDirLabel: payload.workspaceErpIncludeDirLabel || GENERATED_PROJECT_ENV.WORKSPACE_ERP_INCLUDE_DIR || '',
+  };
+}
 
 const promptEditorState = {
   activeTemplateId: 'documentation',
@@ -57,11 +80,19 @@ function normalizeMultiline(value) {
   return String(value || '').replace(/\r\n/g, '\n').trim();
 }
 
+function normalizeWorkspacePath(value) {
+  return String(value || '').trim().replace(/\\/g, '/');
+}
+
 function cloneMap(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
   }
   return { ...value };
+}
+
+function isDirectoryPickerSupported() {
+  return typeof window.showDirectoryPicker === 'function';
 }
 
 function getTemplateRegistry() {
@@ -90,6 +121,21 @@ function getAIProviderLabel(value) {
 
 function getAIActionLabel(value) {
   return value === 'copy-only' ? 'Somente copiar o prompt' : 'Copiar e abrir a IA';
+}
+
+function getWorkspaceFieldId(kindId) {
+  return kindId === 'erpBackend' ? 'workspaceErpBackendDirLabel' : 'workspaceMobileFrontendDirLabel';
+}
+
+function getWorkspaceHintId(kindId) {
+  return kindId === 'erpBackend' ? 'workspaceErpBackendHint' : 'workspaceMobileFrontendHint';
+}
+
+function getPermissionCopy(permission) {
+  if (permission === 'granted') return 'Permissao de leitura ativa no navegador.';
+  if (permission === 'prompt') return 'A permissao local precisa ser confirmada novamente no navegador.';
+  if (permission === 'denied') return 'O navegador negou a leitura deste diretorio.';
+  return 'Permissao local ainda nao confirmada.';
 }
 
 function syncPromptEditorStateFromFields() {
@@ -167,6 +213,10 @@ function readForm() {
     downloadFolder: normalizeFolder(document.getElementById('downloadFolder').value),
     aiProvider: (document.querySelector('input[name="aiProvider"]:checked') || {}).value || 'claude',
     aiAction: (document.querySelector('input[name="aiAction"]:checked') || {}).value || 'copy-and-open',
+    projectRootDirLabel: document.getElementById('projectRootDirLabel').value.trim(),
+    workspaceErpBackendDirLabel: normalizeWorkspacePath(document.getElementById('workspaceErpBackendDirLabel').value),
+    workspaceMobileFrontendDirLabel: normalizeWorkspacePath(document.getElementById('workspaceMobileFrontendDirLabel').value),
+    workspaceErpIncludeDirLabel: normalizeWorkspacePath(document.getElementById('workspaceErpIncludeDirLabel').value),
     activePromptTemplateId: getCurrentTemplateId(),
     promptTemplateOverrides: cloneMap(promptEditorState.overrides),
     promptTemplateAdditions: cloneMap(promptEditorState.additions),
@@ -183,6 +233,10 @@ function fillForm(data) {
   document.getElementById('zendeskToken').value = data.zendeskToken || '';
   document.getElementById('zendeskJiraField').value = data.zendeskJiraField || 'customfield_11086';
   document.getElementById('downloadFolder').value = data.downloadFolder || 'shield';
+  document.getElementById('projectRootDirLabel').value = data.projectRootDirLabel || '';
+  document.getElementById('workspaceErpBackendDirLabel').value = data.workspaceErpBackendDirLabel || '';
+  document.getElementById('workspaceMobileFrontendDirLabel').value = data.workspaceMobileFrontendDirLabel || '';
+  document.getElementById('workspaceErpIncludeDirLabel').value = data.workspaceErpIncludeDirLabel || '';
 
   const aiProviderVal = data.aiProvider || 'claude';
   const aiRadio = document.querySelector(`input[name="aiProvider"][value="${aiProviderVal}"]`);
@@ -254,6 +308,30 @@ function renderStrategySummary(payload) {
       copy: promptSummary.mode,
       tone: '',
     },
+    {
+      label: 'Projeto local',
+      value: payload.projectRootDirLabel || 'Nao vinculado',
+      copy: 'Necessario para ler e atualizar o .env pelo plugin',
+      tone: payload.projectRootDirLabel ? '' : 'warn',
+    },
+    {
+      label: 'ERP do .env',
+      value: payload.workspaceErpBackendDirLabel || 'Nao configurado',
+      copy: 'Valor sincronizado com WORKSPACE_ERP_BACKEND_DIR',
+      tone: payload.workspaceErpBackendDirLabel ? '' : 'warn',
+    },
+    {
+      label: 'Mobile do .env',
+      value: payload.workspaceMobileFrontendDirLabel || 'Nao configurado',
+      copy: 'Valor sincronizado com WORKSPACE_MOBILE_FRONTEND_DIR',
+      tone: payload.workspaceMobileFrontendDirLabel ? '' : 'warn',
+    },
+    {
+      label: 'Includes do .env',
+      value: payload.workspaceErpIncludeDirLabel || 'Nao configurado',
+      copy: 'Valor sincronizado com WORKSPACE_ERP_INCLUDE_DIR',
+      tone: payload.workspaceErpIncludeDirLabel ? '' : 'warn',
+    },
   ];
 
   node.innerHTML = cards.map((card) => `
@@ -291,11 +369,79 @@ function validatePayload(payload) {
   return null;
 }
 
+async function syncWorkspaceFieldsFromEnv() {
+  const envState = await SHIELD.localWorkspace.readEnvValues();
+  if (!envState.ok) {
+    return envState;
+  }
+
+  document.getElementById('workspaceErpBackendDirLabel').value = envState.values.WORKSPACE_ERP_BACKEND_DIR || '';
+  document.getElementById('workspaceMobileFrontendDirLabel').value = envState.values.WORKSPACE_MOBILE_FRONTEND_DIR || '';
+  document.getElementById('workspaceErpIncludeDirLabel').value = envState.values.WORKSPACE_ERP_INCLUDE_DIR || '';
+
+  await storageSet({
+    workspaceErpBackendDirLabel: envState.values.WORKSPACE_ERP_BACKEND_DIR || '',
+    workspaceMobileFrontendDirLabel: envState.values.WORKSPACE_MOBILE_FRONTEND_DIR || '',
+    workspaceErpIncludeDirLabel: envState.values.WORKSPACE_ERP_INCLUDE_DIR || '',
+  });
+
+  renderStrategySummary(readForm());
+  return envState;
+}
+
+async function renderWorkspaceDirectoryStatus() {
+  const projectRootStatus = await SHIELD.localWorkspace.getProjectRootStatus().catch(() => null);
+  const directoryStatuses = await SHIELD.localWorkspace.getDirectoryStatuses().catch(() => ({
+    erpBackend: null,
+    mobileFrontend: null,
+  }));
+
+  const projectRootField = document.getElementById('projectRootDirLabel');
+  const projectRootHint = document.getElementById('projectRootHint');
+
+  if (projectRootStatus && projectRootStatus.configured) {
+    projectRootField.value = projectRootStatus.label || projectRootField.value;
+    projectRootHint.textContent = getPermissionCopy(projectRootStatus.permission) + ' O plugin usa essa raiz para sincronizar o .env.';
+  } else if (!isDirectoryPickerSupported()) {
+    projectRootHint.textContent = 'O navegador atual nao suporta a selecao segura de diretorios usada pela extensao.';
+  } else {
+    projectRootHint.textContent = 'Selecione a raiz local do projeto para que o plugin leia e atualize o arquivo .env desta pasta.';
+  }
+
+  ['erpBackend', 'mobileFrontend'].forEach((kindId) => {
+    const field = document.getElementById(getWorkspaceFieldId(kindId));
+    const hint = document.getElementById(getWorkspaceHintId(kindId));
+    const status = directoryStatuses[kindId];
+
+    if (!status || !status.configured) {
+      hint.textContent = kindId === 'erpBackend'
+        ? 'Defina o valor no campo acima e vincule uma permissao de leitura para o navegador conseguir ler os fontes do ERP.'
+        : 'Defina o valor no campo acima e vincule uma permissao de leitura. Esse front-end so entra quando o ticket indicar contexto mobile.';
+      return;
+    }
+
+    const prefix = kindId === 'erpBackend'
+      ? 'Permissao do ERP local: '
+      : 'Permissao do app mobile local: ';
+    hint.textContent = `${prefix}${getPermissionCopy(status.permission)} Pasta autorizada no navegador: ${status.label || 'selecionada'}.`;
+
+    if (!field.value.trim()) {
+      field.value = status.label || '';
+    }
+  });
+}
+
 async function loadOptions() {
   const data = await storageGet(DEFAULTS);
-  const payload = { ...DEFAULTS, ...data };
+  const payload = applyGeneratedProjectEnvFallback({ ...DEFAULTS, ...data });
   fillForm(payload);
   renderStrategySummary(payload);
+  await renderWorkspaceDirectoryStatus();
+
+  if (payload.projectRootDirLabel) {
+    await syncWorkspaceFieldsFromEnv().catch(() => null);
+    await renderWorkspaceDirectoryStatus();
+  }
 }
 
 async function saveOptions() {
@@ -308,10 +454,26 @@ async function saveOptions() {
     return;
   }
 
+  const projectRootStatus = await SHIELD.localWorkspace.getProjectRootStatus().catch(() => null);
+  if (projectRootStatus && projectRootStatus.configured) {
+    await SHIELD.localWorkspace.writeEnvValues({
+      WORKSPACE_ERP_BACKEND_DIR: payload.workspaceErpBackendDirLabel,
+      WORKSPACE_MOBILE_FRONTEND_DIR: payload.workspaceMobileFrontendDirLabel,
+      WORKSPACE_ERP_INCLUDE_DIR: payload.workspaceErpIncludeDirLabel,
+    });
+  }
+
   await storageSet(payload);
   renderStrategySummary(payload);
   renderPromptTemplateEditor();
-  setStatus('Configuracao salva. O template editavel afeta apenas o prompt enviado a LLM; a anonimização continua no pipeline interno.', '');
+  await renderWorkspaceDirectoryStatus();
+
+  if (projectRootStatus && projectRootStatus.configured) {
+    setStatus('Configuracao salva e diretorios de workspace sincronizados com o .env do projeto.', '');
+    return;
+  }
+
+  setStatus('Configuracao salva. Vincule a raiz local do projeto para que o plugin leia e atualize o .env automaticamente.', 'warn');
 }
 
 function bindLiveSummary() {
@@ -341,10 +503,84 @@ async function resetOptions() {
   promptEditorState.additions = {};
   promptEditorState.activeTemplateId = DEFAULTS.activePromptTemplateId;
 
+  await Promise.all([
+    SHIELD.localWorkspace.removeDirectoryHandle('projectRoot'),
+    SHIELD.localWorkspace.removeDirectoryHandle('erpBackend'),
+    SHIELD.localWorkspace.removeDirectoryHandle('mobileFrontend'),
+  ]);
+
   await storageSet({ ...DEFAULTS });
   fillForm(DEFAULTS);
   renderStrategySummary(DEFAULTS);
+  await renderWorkspaceDirectoryStatus();
   setStatus('Configuracao restaurada para o padrao.', '');
+}
+
+async function pickProjectRoot() {
+  if (!isDirectoryPickerSupported()) {
+    setStatus('O navegador atual nao suporta a selecao segura de diretorios usada pela extensao.', 'warn');
+    return;
+  }
+
+  const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  const label = await SHIELD.localWorkspace.saveDirectoryHandle('projectRoot', handle);
+  document.getElementById('projectRootDirLabel').value = label;
+  await storageSet({ projectRootDirLabel: label });
+  await renderWorkspaceDirectoryStatus();
+
+  const ensureResult = await SHIELD.localWorkspace.ensureEnvExists().catch(() => null);
+
+  const envState = await syncWorkspaceFieldsFromEnv();
+  if (envState.ok) {
+    const msg = ensureResult && ensureResult.created
+      ? ensureResult.fromExample
+        ? 'Raiz do projeto vinculada. .env criado automaticamente a partir do .env.example — edite os valores antes de usar.'
+        : 'Raiz do projeto vinculada. .env criado (sem .env.example disponivel) — preencha as variaveis manualmente.'
+      : 'Raiz do projeto vinculada. Valores de workspace recarregados do .env.';
+    setStatus(msg, '');
+    return;
+  }
+
+  setStatus(`Raiz do projeto vinculada, mas o .env ainda nao foi lido: ${envState.reason}`, 'warn');
+}
+
+async function reloadEnvFromProjectRoot() {
+  const envState = await syncWorkspaceFieldsFromEnv();
+  await renderWorkspaceDirectoryStatus();
+  if (envState.ok) {
+    setStatus('Valores de workspace recarregados do .env do projeto.', '');
+    return;
+  }
+  setStatus(envState.reason, 'warn');
+}
+
+async function clearProjectRoot() {
+  await SHIELD.localWorkspace.removeDirectoryHandle('projectRoot');
+  document.getElementById('projectRootDirLabel').value = '';
+  await storageSet({ projectRootDirLabel: '' });
+  await renderWorkspaceDirectoryStatus();
+  renderStrategySummary(readForm());
+  setStatus('Raiz do projeto desvinculada do plugin.', '');
+}
+
+async function pickWorkspaceDirectory(kindId) {
+  if (!isDirectoryPickerSupported()) {
+    setStatus('O navegador atual nao suporta a selecao segura de diretorios usada pela extensao.', 'warn');
+    return;
+  }
+
+  const kind = SHIELD.localWorkspace.DIRECTORY_KINDS[kindId];
+  const handle = await window.showDirectoryPicker({ mode: 'read' });
+  const label = await SHIELD.localWorkspace.saveDirectoryHandle(kindId, handle);
+  await renderWorkspaceDirectoryStatus();
+  setStatus(`${kind.label} vinculado ao navegador. Se necessario, ajuste o caminho no campo acima e salve para sincronizar o .env. Pasta autorizada: ${label}.`, '');
+}
+
+async function clearWorkspaceDirectory(kindId) {
+  const kind = SHIELD.localWorkspace.DIRECTORY_KINDS[kindId];
+  await SHIELD.localWorkspace.removeDirectoryHandle(kindId);
+  await renderWorkspaceDirectoryStatus();
+  setStatus(`Permissao local removida para ${kind.label}. O valor do .env foi preservado no campo.`, '');
 }
 
 document.getElementById('save').addEventListener('click', () => {
@@ -353,6 +589,34 @@ document.getElementById('save').addEventListener('click', () => {
 
 document.getElementById('reset').addEventListener('click', () => {
   resetOptions().catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('pick-project-root').addEventListener('click', () => {
+  pickProjectRoot().catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('reload-env').addEventListener('click', () => {
+  reloadEnvFromProjectRoot().catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('clear-project-root').addEventListener('click', () => {
+  clearProjectRoot().catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('pick-workspace-erp-backend').addEventListener('click', () => {
+  pickWorkspaceDirectory('erpBackend').catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('clear-workspace-erp-backend').addEventListener('click', () => {
+  clearWorkspaceDirectory('erpBackend').catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('pick-workspace-mobile-frontend').addEventListener('click', () => {
+  pickWorkspaceDirectory('mobileFrontend').catch((error) => setStatus(error.message, 'error'));
+});
+
+document.getElementById('clear-workspace-mobile-frontend').addEventListener('click', () => {
+  clearWorkspaceDirectory('mobileFrontend').catch((error) => setStatus(error.message, 'error'));
 });
 
 bindLiveSummary();

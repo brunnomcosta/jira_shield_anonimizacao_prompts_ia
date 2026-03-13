@@ -42,6 +42,20 @@ export function anonymizeIssue(issue, zendeskData = null) {
   ].filter(Boolean);
   autores.forEach((nome) => map.registerPessoa(nome));
 
+  // Empresa cliente (customfield_11071) — registra antes de processar qualquer texto
+  const nomeCliente = fields.customfield_11071?.value;
+  if (nomeCliente) map.registerEmpresa(nomeCliente);
+
+  // Identificadores sensíveis do cliente — registrados como empresa para substituição em todo o texto
+  // customfield_11085: código de conta/CRM (string pura, ex: "2196559855")
+  // customfield_11053: campo identificador (string pura ou customFieldOption)
+  // customfield_11038: código do cliente (customFieldOption, ex: "TFECXK")
+  [
+    fields.customfield_11085,
+    typeof fields.customfield_11053 === 'object' ? fields.customfield_11053?.value : fields.customfield_11053,
+    fields.customfield_11038?.value,
+  ].filter(Boolean).forEach((val) => map.registerEmpresa(String(val).trim()));
+
   // Autores dos comentários Zendesk
   if (zendeskData) {
     const zdAutores = zendeskData.comments
@@ -166,6 +180,16 @@ export function anonymizeIssue(issue, zendeskData = null) {
 
       // Comentários Zendesk anonimizados (null se não configurado)
       zdComments: anonZdComments,
+
+      // Campos de classificação interna (não-PII — passados para PDF/metadata)
+      customfield_11069: fields.customfield_11069 ?? null,
+      customfield_11078: fields.customfield_11078 ?? null,
+
+      // Campos sensíveis — nulificados na saída para não vazar dados do cliente
+      customfield_11071: null,
+      customfield_11085: null,
+      customfield_11053: null,
+      customfield_11038: null,
     },
   };
 

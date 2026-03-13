@@ -20,6 +20,7 @@ import fs   from 'fs';
 import path from 'path';
 import { fetchIssue, testConnection, fetchZendeskViaJira } from './jiraClient.js';
 import { anonymizeIssue }                                   from './anonymizer.js';
+import { extractIssueTechnicalContext }                     from './issueTechnicalContext.js';
 import { generatePDF }                                      from './pdfGenerator.js';
 import { isConfigured, extractTicketId, fetchTicketComments } from './zendeskClient.js';
 import { fetchZendeskViaBrowser }                            from './browserExtractor.js';
@@ -46,9 +47,10 @@ function log(icon, msg, color = c.reset) {
  * Extrai e salva metadados estruturais da issue em {issueKey}_metadata.json.
  * Contém apenas campos sem dados pessoais — usado pelo diagnóstico de negócio.
  */
-function saveMetadata(issueKey, issue, outputDir) {
+function saveMetadata(issueKey, issue, outputDir, zendeskData = null, technicalContext = null) {
   const f = issue.fields || {};
   const zdField = process.env.ZENDESK_JIRA_FIELD || 'customfield_11086';
+  const effectiveTechnicalContext = technicalContext || extractIssueTechnicalContext(issue, zendeskData);
 
   // Sprint: customfield_10014 pode ser array de objetos ou strings com formato Greenhopper
   let sprint = null;
@@ -107,9 +109,12 @@ function saveMetadata(issueKey, issue, outputDir) {
     } : null,
     sprint,
     epicKey:          f.customfield_10008 || null,
+    rotina:           f.customfield_11078?.value || null,
+    modulo:           f.customfield_11069?.value || null,
     attachmentNames:  (f.attachment || []).map(a => a.filename),
     commentCount:     f.comment?.total ?? f.comment?.comments?.length ?? 0,
     zendeskTicketId,
+    technicalContext: effectiveTechnicalContext,
   };
 
   const safeMetadata = sanitizeStructuredData(metadata);
@@ -202,6 +207,11 @@ async function exportIssue(issueKey, mode = 'full') {
     c.gray
   );
 
+  const technicalContext = extractIssueTechnicalContext(issue, zendeskData);
+  const safeTechnicalContext = sanitizeStructuredData(technicalContext);
+  anonIssue.technicalContext = safeTechnicalContext;
+  anonIssue.fields = { ...(anonIssue.fields || {}), technicalContext: safeTechnicalContext };
+
   // 3. Gerar PDF
   log('📄', 'Gerando PDF...', c.yellow);
   const pdfBuffer = generatePDF(anonIssue);
@@ -212,7 +222,7 @@ async function exportIssue(issueKey, mode = 'full') {
   fs.writeFileSync(filepath, pdfBuffer);
 
   // 4b. Salvar metadados estruturais para o diagnóstico de negócio
-  saveMetadata(issueKey, issue, outputDir);
+  saveMetadata(issueKey, issue, outputDir, zendeskData, technicalContext);
 
   // 5. Log de auditoria local
   const auditPath = path.join(outputDir, 'audit.log');

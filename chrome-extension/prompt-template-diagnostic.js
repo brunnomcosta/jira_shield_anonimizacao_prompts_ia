@@ -6,84 +6,96 @@
     throw new Error('SHIELD prompt registry must be loaded before prompt-template-diagnostic.js');
   }
 
+  if (!root.promptShared) {
+    throw new Error('SHIELD prompt-shared.js must be loaded before prompt-template-diagnostic.js');
+  }
+
+  const shared = root.promptShared;
+
+  // Restricao exclusiva do plugin Chrome: sem acesso a workspace local
+  const chromeOnlyConstraints = [
+    '- Como este prompt foi gerado pelo plugin Chrome, nao presuma acesso a workspace local ou a outros arquivos alem do contexto incluido.',
+  ];
+
+  const requiredBlock = [
+    '## Ticket anonimizado',
+    'Issue: {{issueKey}}',
+    '',
+    '{{anonymizedText}}',
+    '',
+    '{{workspaceContext}}',
+  ].join('\n');
+
+  // ── Template 1: diagnostic (sem fontes locais) ────────────────────────────
+  // Remove o marcador {{workspaceInstruction}} — workspace chega via {{workspaceContext}}
+  const outputSections = shared.OUTPUT_SECTIONS
+    .map(s => s.replace('\n{{workspaceInstruction}}', ''))
+    .join('\n\n');
+
   root.prompts.registerTemplate({
     id: 'diagnostic',
     label: 'Prompt Diagnostico',
     description: 'Replica o contrato de analise de negocio do diagnostics.js para uso no plugin Chrome.',
     sourceFile: 'chrome-extension/prompt-template-diagnostic.js',
-    requiredPlaceholders: ['issueKey', 'anonymizedText'],
-    requiredBlock: [
-      '## Ticket anonimizado',
-      'Issue: {{issueKey}}',
-      '',
-      '{{anonymizedText}}',
-    ].join('\n'),
+    requiredPlaceholders: ['issueKey', 'anonymizedText', 'workspaceContext'],
+    requiredBlock,
     template: [
-      'Voce e um engenheiro de produto senior analisando um bug reportado por cliente.',
-      '',
-      'Seu objetivo e entender o problema de negocio, reconstruir a sequencia de eventos que gerou o problema e identificar a provavel causa raiz no produto.',
+      shared.PERSONA,
       '',
       'Importante:',
-      '- foque no problema descrito pelo cliente e nao em anonimização ou LGPD',
-      '- a descricao da issue e os comentarios sao a fonte primaria de analise',
-      '- dados pessoais foram substituidos por tokens como [PESSOA-1] e [EMPRESA-1]',
-      '- nao invente fatos, datas, componentes, endpoints, tabelas, arquivos ou linhas',
-      '- use somente evidencias presentes no ticket anonimizado fornecido neste prompt',
-      '- se a evidencia nao for suficiente, escreva explicitamente "Inconclusivo com os dados fornecidos"',
-      '- como este prompt foi gerado pelo plugin Chrome, nao presuma acesso a workspace local ou a outros arquivos alem do contexto incluido',
-      '- apresente exatamente uma hipotese principal usando o rotulo obrigatorio `Causa mais provavel:`',
+      ...shared.CORE_CONSTRAINTS,
+      ...chromeOnlyConstraints,
       '',
       '## Ticket anonimizado',
       'Issue: {{issueKey}}',
       '',
       '{{anonymizedText}}',
+      '',
+      '{{workspaceContext}}',
       '',
       '## Instrucao de saida',
       '',
-      'Produza um relatorio de analise de negocio em Markdown com EXATAMENTE estas 13 secoes, nesta ordem, usando subtitulos `###`:',
+      shared.OUTPUT_INTRO,
       '',
-      '### Titulo do documento de analise',
-      'Uma linha. Titulo objetivo que descreve o problema de negocio.',
+      outputSections,
+    ].join('\n'),
+  });
+
+  // ── Template 2: diagnostic_with_sources (com trechos de código fornecidos) ─
+  // Substitui {{workspaceInstruction}} pela instrucao positiva de uso das fontes
+  const workspaceSourceInstruction =
+    '- Trechos de codigo-fonte foram incluidos neste prompt. Tente identificar os fontes relacionados e os trechos que validam se o problema descrito realmente pode ocorrer e qual e a causa mais provavel em fonte. Cite arquivo:linha exatos quando identificar o ponto de falha ou o ponto de decisao relevante.';
+
+  const outputSectionsWithSources = shared.OUTPUT_SECTIONS
+    .map(s => s.replace('{{workspaceInstruction}}', workspaceSourceInstruction))
+    .join('\n\n');
+
+  root.prompts.registerTemplate({
+    id: 'diagnostic_with_sources',
+    label: 'Prompt Diagnostico + Contexto Fontes',
+    description: 'Variante do diagnostic que inclui trechos de codigo-fonte como contexto adicional.',
+    sourceFile: 'chrome-extension/prompt-template-diagnostic.js',
+    requiredPlaceholders: ['issueKey', 'anonymizedText', 'workspaceContext'],
+    requiredBlock,
+    template: [
+      shared.PERSONA,
       '',
-      '### Resumo da situacao reportada',
-      '2 a 3 frases curtas e diretas. O que o cliente reportou, em qual contexto, e qual o impacto percebido por ele.',
+      'Importante:',
+      ...shared.CORE_CONSTRAINTS,
+      ...chromeOnlyConstraints,
       '',
-      '### Resumo da analise',
-      '2 a 3 frases. O que a analise do ticket revelou, qual e a hipotese mais provavel de causa raiz e o grau de confianca na hipotese. Inclua obrigatoriamente uma linha no formato `Causa mais provavel: ...`.',
+      '## Ticket anonimizado',
+      'Issue: {{issueKey}}',
       '',
-      '### Resumo da solucao proposta',
-      '2 a 3 frases. O que precisa ser feito para resolver o problema, sem detalhes de implementacao, e qual resultado esperado do ponto de vista do cliente.',
+      '{{anonymizedText}}',
       '',
-      '### Riscos relacionados ao contexto do caso',
-      'Liste os riscos de negocio mais relevantes associados ao contexto relatado pelo cliente, ao estado atual do caso e a solucao proposta. Nao liste riscos genericos:',
-      '- Risco atual se nada for feito: impacto operacional, financeiro, regulatorio ou de experiencia do cliente neste caso',
-      '- Risco de recorrencia no contexto observado: como o problema pode voltar a ocorrer considerando o fluxo, rotina ou operacao afetada',
-      '- Risco de regressao ou implantacao: cuidado necessario para corrigir este caso sem causar novo efeito colateral no mesmo contexto funcional',
-      '- Nivel de impacto/probabilidade: alta, media ou baixa, com uma justificativa curta vinculada ao contexto do caso',
+      '{{workspaceContext}}',
       '',
-      '### Timeline de eventos',
-      'Liste em ordem cronologica os eventos relevantes extraidos do ticket e do historico.',
+      '## Instrucao de saida',
       '',
-      '### Sintomas vs. causa raiz hipotetica',
-      'Separe claramente os sintomas reportados e a hipotese de causa raiz. Na hipotese principal, use o rotulo `Causa mais provavel:` e liste as evidencias principais.',
+      shared.OUTPUT_INTRO,
       '',
-      '### Trechos de codigo relacionados',
-      'Use somente referencias presentes no contexto recebido. Se nao houver evidencia suficiente para localizar o ponto exato no codigo, escreva exatamente: `Nao foi possivel localizar o ponto exato no codigo com o contexto atual.`',
-      '',
-      '### Passos para reproduzir e investigar',
-      'Liste passos concretos para reproduzir o problema e confirmar a hipotese principal.',
-      '',
-      '### Criterios de aceite para resolucao',
-      'Liste condicoes verificaveis que indicam resolucao do caso.',
-      '',
-      '### Cenarios de teste regressivo',
-      'Proponha 2 a 3 cenarios de teste regressivo com entrada e resultado esperado.',
-      '',
-      '### Contexto adicional relevante',
-      'Liste informacoes do ticket que podem ser uteis para a investigacao.',
-      '',
-      '### Limitacoes e proximos passos',
-      'Deixe explicito o que nao foi possivel confirmar com o contexto atual e quais proximos passos reduziriam a incerteza.',
+      outputSectionsWithSources,
     ].join('\n'),
   });
 }(typeof globalThis !== 'undefined' ? globalThis : this));

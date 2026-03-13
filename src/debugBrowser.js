@@ -86,27 +86,44 @@ async function main() {
 
   let tmpDir = null;
   let context = null;
+  let cdpBrowser = null;
+  let ownsContext = false;
 
   try {
-    for (const { dataDir, profile } of profilePaths()) {
-      if (!fs.existsSync(path.join(dataDir, profile))) continue;
-      tmpDir = copyProfileToTemp(dataDir, profile);
-      if (!tmpDir) continue;
-      try {
-        context = await chromium.launchPersistentContext(tmpDir, {
-          headless: false,
-          channel:  'chrome',
-          args: ['--no-sandbox', '--disable-infobars', '--disable-blink-features=AutomationControlled'],
-        });
-        console.log('✅ Browser lançado com perfil do Chrome');
-        break;
-      } catch (e) {
-        removeDirRecursive(tmpDir); tmpDir = null;
-        console.log(`⚠️  Chrome falhou (${e.message.split('\n')[0]}), tentando Edge...`);
+    // 1. Tenta conectar ao Chrome já aberto via CDP (porta 9222)
+    try {
+      cdpBrowser = await chromium.connectOverCDP('http://localhost:9222');
+      const contexts = cdpBrowser.contexts();
+      context = contexts.length > 0 ? contexts[0] : await cdpBrowser.newContext();
+      console.log('✅ Conectado ao Chrome já aberto — abrindo nova aba');
+    } catch {
+      cdpBrowser = null;
+    }
+
+    // 2. Fallback: lança nova instância com perfil copiado
+    if (!context) {
+      ownsContext = true;
+      for (const { dataDir, profile } of profilePaths()) {
+        if (!fs.existsSync(path.join(dataDir, profile))) continue;
+        tmpDir = copyProfileToTemp(dataDir, profile);
+        if (!tmpDir) continue;
+        try {
+          context = await chromium.launchPersistentContext(tmpDir, {
+            headless: false,
+            channel:  'chrome',
+            args: ['--no-sandbox', '--disable-infobars', '--disable-blink-features=AutomationControlled'],
+          });
+          console.log('✅ Browser lançado com perfil do Chrome');
+          break;
+        } catch (e) {
+          removeDirRecursive(tmpDir); tmpDir = null;
+          console.log(`⚠️  Chrome falhou (${e.message.split('\n')[0]}), tentando Edge...`);
+        }
       }
     }
 
     if (!context) {
+      ownsContext = true;
       const tmp = path.join(os.tmpdir(), `lgpd-debug-clean-${Date.now()}`);
       fs.mkdirSync(tmp, { recursive: true });
       tmpDir = tmp;
@@ -190,8 +207,12 @@ async function main() {
     console.log('   Envie screenshot.png e network.json para análise.\n');
 
   } finally {
-    try { if (context) await context.close(); } catch { /* ignora */ }
-    if (tmpDir) removeDirRecursive(tmpDir);
+    if (ownsContext) {
+      try { if (context) await context.close(); } catch { /* ignora */ }
+      if (tmpDir) removeDirRecursive(tmpDir);
+    } else {
+      try { if (cdpBrowser) await cdpBrowser.close(); } catch { /* ignora */ }
+    }
   }
 }
 

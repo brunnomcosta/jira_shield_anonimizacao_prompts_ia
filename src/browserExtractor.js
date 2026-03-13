@@ -197,9 +197,26 @@ async function scrapeFromDom(page) {
 // ─── Extração principal ───────────────────────────────────────────────────────
 
 /**
+ * Tenta conectar ao Chrome já aberto via CDP (porta 9222).
+ * Requer que o Chrome tenha sido iniciado com --remote-debugging-port=9222.
+ * Retorna { context, cdpBrowser } ou null se não houver Chrome com debug ativo.
+ */
+async function tryConnectToExistingChrome() {
+  try {
+    const cdpBrowser = await chromium.connectOverCDP('http://localhost:9222');
+    const contexts = cdpBrowser.contexts();
+    const context = contexts.length > 0 ? contexts[0] : await cdpBrowser.newContext();
+    return { context, cdpBrowser };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Extrai comentários Zendesk usando automação de browser.
- * Copia os cookies do Chrome instalado para um perfil temporário,
- * evitando conflito com o Chrome já aberto.
+ * Tenta primeiro conectar ao Chrome já aberto (via CDP na porta 9222),
+ * abrindo apenas uma nova aba. Se não houver Chrome com debug ativo,
+ * copia os cookies para um perfil temporário e abre nova instância.
  */
 export async function fetchZendeskViaBrowser(issueKey, ticketId) {
   const base = process.env.JIRA_BASE_URL?.replace(/\/$/, '');
@@ -210,44 +227,54 @@ export async function fetchZendeskViaBrowser(issueKey, ticketId) {
 
   let tmpDir = null;
   let context = null;
+  let cdpBrowser = null;  // conexão CDP (não fecha o browser ao desconectar)
+  let ownsContext = false; // true quando lançamos nós mesmos o browser
 
   try {
-    // Tenta cada perfil disponível
-    let launched = false;
-    for (const { dataDir, profile } of profilePaths()) {
-      if (!fs.existsSync(path.join(dataDir, profile))) continue;
+    // 1. Tenta reusar o Chrome já aberto via CDP
+    const existing = await tryConnectToExistingChrome();
+    if (existing) {
+      context = existing.context;
+      cdpBrowser = existing.cdpBrowser;
+      console.log('✅ Conectado ao Chrome já aberto — abrindo nova aba');
+    } else {
+      // 2. Fallback: lança nova instância com perfil copiado
+      ownsContext = true;
+      let launched = false;
+      for (const { dataDir, profile } of profilePaths()) {
+        if (!fs.existsSync(path.join(dataDir, profile))) continue;
 
-      tmpDir = copyProfileToTemp(dataDir, profile);
-      if (!tmpDir) continue;
+        tmpDir = copyProfileToTemp(dataDir, profile);
+        if (!tmpDir) continue;
 
-      try {
+        try {
+          context = await chromium.launchPersistentContext(tmpDir, {
+            headless: false,
+            channel:  'chrome',
+            args: [
+              '--no-sandbox',
+              '--disable-blink-features=AutomationControlled',
+              '--disable-infobars',
+            ],
+          });
+          launched = true;
+          break;
+        } catch {
+          removeDirRecursive(tmpDir);
+          tmpDir = null;
+        }
+      }
+
+      // Último recurso: Chromium sem sessão (usuário faz login manualmente)
+      if (!launched) {
+        const fallbackTmp = path.join(os.tmpdir(), `lgpd-chromium-${Date.now()}`);
+        fs.mkdirSync(fallbackTmp, { recursive: true });
+        tmpDir = fallbackTmp;
         context = await chromium.launchPersistentContext(tmpDir, {
           headless: false,
-          channel:  'chrome',
-          args: [
-            '--no-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-infobars',
-          ],
+          args: ['--no-sandbox', '--disable-infobars'],
         });
-        launched = true;
-        break;
-      } catch {
-        removeDirRecursive(tmpDir);
-        tmpDir = null;
-        // Tenta o próximo perfil
       }
-    }
-
-    // Último recurso: Chromium sem sessão (usuário faz login manualmente)
-    if (!launched) {
-      const fallbackTmp = path.join(os.tmpdir(), `lgpd-chromium-${Date.now()}`);
-      fs.mkdirSync(fallbackTmp, { recursive: true });
-      tmpDir = fallbackTmp;
-      context = await chromium.launchPersistentContext(tmpDir, {
-        headless: false,
-        args: ['--no-sandbox', '--disable-infobars'],
-      });
     }
 
     const page = await context.newPage();
@@ -303,7 +330,13 @@ export async function fetchZendeskViaBrowser(issueKey, ticketId) {
     return capturedData;
 
   } finally {
-    try { if (context) await context.close(); } catch { /* ignora */ }
-    if (tmpDir) removeDirRecursive(tmpDir);
+    if (ownsContext) {
+      // Fechamos o browser que lançamos nós mesmos
+      try { if (context) await context.close(); } catch { /* ignora */ }
+      if (tmpDir) removeDirRecursive(tmpDir);
+    } else {
+      // Apenas desconecta do Chrome existente sem fechá-lo
+      try { if (cdpBrowser) await cdpBrowser.close(); } catch { /* ignora */ }
+    }
   }
 }

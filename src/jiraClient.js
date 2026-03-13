@@ -63,7 +63,13 @@ export async function fetchIssue(issueKey) {
     `customfield_29200,customfield_29201,customfield_29202,` +
     // Metadados de negócio para análise de causa raiz
     `labels,components,fixVersions,versions,issuelinks,subtasks,parent,attachment,` +
-    `customfield_10014,customfield_10008`;
+    `customfield_10014,customfield_10008,` +
+    // Classificação interna da rotina (ex: "QIPA215 - RESULTADOS") e módulo (ex: "INSPEÇÃO DE PROCESSOS (SIGAQIP)")
+    `customfield_11078,customfield_11069,` +
+    // Nome do cliente (empresa) — usado para anonimização em toda a extração
+    `customfield_11071,` +
+    // Campos sensíveis anonimizados 100%: código de conta/CRM, identificadores e código do cliente
+    `customfield_11085,customfield_11053,customfield_11038`;
 
   const res = await fetch(url, {
     method: 'GET',

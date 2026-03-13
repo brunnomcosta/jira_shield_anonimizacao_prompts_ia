@@ -32,6 +32,9 @@ Melhorias recentes:
 - a compactacao de contexto do diagnostico ganhou um terceiro tier ultra-compacto para reduzir prompts muito grandes antes do envio ao LLM
 - a extracao contextual de pessoas ficou mais conservadora para evitar falsos positivos em termos de triagem e vocabulario tecnico
 - a deteccao de RG passou a ignorar padroes dentro de URLs e query strings, reduzindo falso positivo em links
+- a extracao da issue agora inclui `customfield_11069` (modulo da classificacao, ex: "INSPECAO DE PROCESSOS (SIGAQIP)") e `customfield_11078` (rotina relacionada, ex: "QIPA215 - RESULTADOS"), exibidos no PDF e salvos no metadata.json
+- o nome da empresa cliente (`customfield_11071`) e automaticamente registrado no EntityMap antes do processamento, garantindo substituicao consistente por `[EMPRESA-N]` em todos os textos da issue
+- os identificadores sensiveis do cliente — codigo de conta/CRM (`customfield_11085`), campo identificador (`customfield_11053`) e codigo do cliente (`customfield_11038`) — sao anonimizados 100% e nulificados na saida, com seus valores registrados no EntityMap para mascaramento em todo o texto
 
 ## Evolucao em andamento
 
@@ -53,7 +56,7 @@ Melhorias recentes:
 - Etapa 2 concluida em 2026-03-13: a analise de negocio passou a exigir `Riscos relacionados ao contexto do caso` no template padrao, evitando riscos genericos e focando no impacto do caso reportado.
 - Etapa 3 concluida em 2026-03-13: a extensao Chrome passou a expor o template padrao do sistema, override do usuario, regras complementares e preview consolidado do prompt enviado a LLM.
 - Etapa 4 concluida em 2026-03-13: o plugin ganhou `Prompt Diagnostico` com outro arquivo fisico de template, separado do template de documentacao e com configuracao isolada por `templateId`.
-- Etapa em andamento: Etapa 5 - avaliar e projetar `Prompt Diagnostico + Contexto Fontes` sem inventar acesso ao workspace local.
+- Etapa 5 concluida em 2026-03-13: o plugin passou a expor `Prompt Diagnostico + Contexto Fontes`, montar o prompt final no service worker e bloquear o envio quando nenhum snippet real de fonte foi anexado.
 
 ### Etapas concluidas
 
@@ -66,11 +69,12 @@ Melhorias recentes:
 - O template de analise de negocio em `src/diagnostics.js` passou a exigir uma secao explicita de riscos relacionados ao contexto do caso, com instrucao para nao listar riscos genericos, e a cobertura foi adicionada em `tests/diagnosticsPromptContracts.test.js`.
 - A extensao Chrome passou a usar `chrome-extension/prompt-templates.js` como ponto unico para templates de prompt da LLM, com visualizacao do template padrao, override opcional, regras complementares e preview consolidado nas opcoes.
 - A extensao Chrome passou a carregar tambem `chrome-extension/prompt-template-diagnostic.js`, espelhando o contrato do diagnostico de negocio do CLI em um arquivo separado e configuravel de forma independente.
+- `Prompt Diagnostico + Contexto Fontes` agora so prossegue quando o navegador realmente consegue anexar snippets do workspace local; sem isso, o plugin falha de forma explicita em vez de gerar um prompt sem fontes.
 
 ### Proximas etapas
 
-- Evoluir o plugin Chrome com `Prompt Documentacao` e `Prompt Diagnostico`.
-- Revisar a viabilidade segura de `Prompt Diagnostico + Contexto Fontes`.
+- Avaliar uso de includes locais do ERP tambem no plugin, sem duplicar regras do `diagnostics.js`.
+- Revisar se vale extrair um modulo compartilhado para a infraestrutura de templates entre CLI e extensao.
 
 ### Decisoes tecnicas tomadas
 
@@ -83,7 +87,7 @@ Melhorias recentes:
 ### Riscos conhecidos
 
 - Ainda existe duplicidade de regras de mascaramento entre o runtime Node e o runtime da extensao Chrome. O comportamento foi alinhado nesta etapa, mas o ponto unico cross-runtime ainda nao existe.
-- `Prompt Diagnostico + Contexto Fontes` pode exigir integracao com o workspace local ou um companion CLI; a extensao isolada nao possui esse acesso hoje.
+- O plugin continua dependendo de permissao local explicita do navegador para ler diretórios do ERP/mobile. Os valores do `.env` deixam a configuracao visivel e sincronizada, mas nao concedem acesso ao filesystem por si só.
 
 ### Limitacoes atuais
 
@@ -93,8 +97,8 @@ Melhorias recentes:
 
 ### Pendencias
 
-- Registrar a alternativa segura caso `Prompt Diagnostico + Contexto Fontes` nao seja implementavel apenas com a extensao.
-- Definir o desenho seguro de `Prompt Diagnostico + Contexto Fontes` sem prometer acesso direto ao workspace local.
+- Avaliar se o plugin deve incorporar includes locais do ERP no rankeamento, como o CLI ja faz.
+- Decidir se a montagem final do prompt deve ser totalmente centralizada no service worker tambem para `Prompt Documentacao`.
 
 ### Como validar
 
@@ -109,8 +113,8 @@ npm test
 ### Como retomar o trabalho
 
 - Ler primeiro esta secao `Evolucao em andamento`.
-- Continuar pela Etapa 5, avaliando se `Prompt Diagnostico + Contexto Fontes` exigira um companion CLI ou outro mecanismo explicito de integracao local.
-- Antes de implementar `Prompt Diagnostico + Contexto Fontes`, revisar as limitacoes arquiteturais registradas acima.
+- Revisar a secao da extensao Chrome, especialmente o fluxo de `Prompt Diagnostico + Contexto Fontes`, antes de mexer novamente em `background.js`, `popup.js` ou `local-workspace.js`.
+- Se houver regressao no prompt com fontes, validar primeiro se existem permissões locais ativas para ERP/mobile nas options do plugin.
 
 ### Arquivos mais relevantes para continuidade
 
@@ -238,8 +242,11 @@ O repositório agora inclui uma extensao Chrome em [chrome-extension/](./chrome-
   - scraping simples da aba Zendesk do Jira
 - Mostra no popup o modo de autenticacao ativo, pasta de download e capacidades disponiveis
 - Armazena historico local das exportacoes no `chrome.storage.local`
-- Permite gerar `Prompt Documentacao` e `Prompt Diagnostico` a partir do ticket anonimizado
+- Permite gerar `Prompt Documentacao`, `Prompt Diagnostico` e `Prompt Diagnostico + Contexto Fontes` a partir do ticket anonimizado
 - Abre a IA escolhida no navegador e copia o prompt automaticamente para a area de transferencia
+- No build da extensao, gera um snapshot interno dos `WORKSPACE_*` a partir do `.env` da raiz do projeto, para que o plugin enxergue esses valores mesmo sendo carregado a partir de `chrome-extension/`
+- O mesmo snapshot tambem registra a raiz local do projeto e a exibe no campo `Raiz local do projeto SHIELD (.env)` do plugin
+- O `Prompt Diagnostico + Contexto Fontes` monta o prompt final no service worker e exige ao menos um snippet real de fonte; sem isso, o plugin interrompe o fluxo com erro explicito
 
 ### O que fica fora da extensao
 
@@ -253,6 +260,9 @@ O repositório agora inclui uma extensao Chrome em [chrome-extension/](./chrome-
 ```bash
 # 1. Copiar a dependência jsPDF e validar a extensao
 npm run build:extension
+
+#    O build tambem gera chrome-extension/generated-project-env.js
+#    com snapshot dos WORKSPACE_* lidos do .env da raiz do projeto
 
 # 2. No Chrome
 # chrome://extensions
@@ -280,8 +290,12 @@ npm run build:extension
    - ou informe uma ou mais issue keys
    - escolha entre `Completo` e `Jira only`
 8. Clique em **Exportar** e acompanhe o resultado no popup
-9. Use **Prompt Documentacao** ou **Prompt Diagnostico** para preparar o prompt desejado e abrir a IA escolhida com o conteudo ja copiado
+9. Use **Prompt Documentacao**, **Prompt Diagnostico** ou **Prompt Diagnostico + Contexto Fontes** para preparar o prompt desejado e abrir a IA escolhida com o conteudo ja copiado
 10. Consulte o bloco de **Historico recente** para revisar exportacoes anteriores
+
+> Se os valores `WORKSPACE_*` nao aparecerem automaticamente no plugin apos alterar o `.env`, rode `npm run build:extension` novamente e recarregue a extensao no `chrome://extensions`.
+
+> Os campos `WORKSPACE_*` exibidos nas options nao bastam, sozinhos, para leitura local. Para que `Prompt Diagnostico + Contexto Fontes` anexe trechos reais, tambem e preciso vincular a permissao de leitura do navegador para os diretorios de ERP e, se aplicavel, mobile.
 
 > Se `JIRA_TOKEN` ficar vazio, a extensao tenta usar a sessão já aberta no navegador.
 
@@ -296,7 +310,7 @@ npm run build:extension
 
 ### Geracao de prompts com IA
 
-O popup disponibiliza **Prompt Documentacao** e **Prompt Diagnostico** para a issue processada, com ou sem ticket Zendesk vinculado. O fluxo faz o seguinte:
+O popup disponibiliza **Prompt Documentacao**, **Prompt Diagnostico** e **Prompt Diagnostico + Contexto Fontes** para a issue processada, com ou sem ticket Zendesk vinculado. O fluxo faz o seguinte:
 
 - busca novamente a issue e os comentarios relacionados no modo selecionado
 - monta um texto anonimizado do ticket para servir de base ao documento
@@ -307,6 +321,7 @@ Os templates podem ser revisados nas options e possuem arquivos fisicos separado
 
 - `chrome-extension/prompt-templates.js` para `Prompt Documentacao`
 - `chrome-extension/prompt-template-diagnostic.js` para `Prompt Diagnostico`
+- `chrome-extension/prompt-template-diagnostic.js` tambem registra `Prompt Diagnostico + Contexto Fontes`
 
 O `Prompt Documentacao` instrui a IA a:
 
@@ -319,6 +334,10 @@ O `Prompt Diagnostico` replica o contrato de analise de negocio do CLI:
 - mantem as 13 secoes da analise de negocio
 - exige `Riscos relacionados ao contexto do caso`
 - deixa explicito quando o contexto do plugin nao for suficiente para localizar o ponto exato no codigo
+
+O `Prompt Diagnostico + Contexto Fontes` faz o mesmo e, quando os diretorios locais estiverem configurados e autorizados no navegador, acrescenta trechos de codigo e contexto local relacionados a issue.
+
+Se nenhum snippet real puder ser anexado, o plugin agora interrompe o fluxo com mensagem explicita. Isso evita gerar um prompt com o rotulo "Contexto Fontes" sem fontes reais do workspace.
 
 ---
 
@@ -501,7 +520,7 @@ lgpd-export-standalone/
 
 | Fonte | Detecta | Confiança |
 |---|---|---|
-| Campos estruturados | Assignee, Reporter, autores de comentários | Alta |
+| Campos estruturados | Assignee, Reporter, autores de comentários, empresa cliente (`customfield_11071`), identificadores sensíveis (`customfield_11085`, `customfield_11053`, `customfield_11038`) | Alta |
 | Bloco de assinatura | "Att, João da Silva \| Gerente \| Acme Ltda" | Alta |
 | Sufixo jurídico | "TechCorp Ltda", "DataBrasil S.A.", "Farmacêutica XYZ" | Alta |
 | Gatilho empresa | "cliente Acme", "reunião com a TechBrasil" | Média |
@@ -577,6 +596,12 @@ Esta é a fonte **obrigatória** do fluxo. O CLI sempre começa pela API do Jira
 | `customfield_29200`, `customfield_29201`, `customfield_29202` | `fields.zdContact.nome`, `fields.zdContact.email`, `fields.zdContact.fone` | Contato do solicitante vindo do Jira; entra anonimizado no PDF |
 | `ZENDESK_JIRA_FIELD` (padrão `customfield_11086`) | `ticketId` / `zendeskTicketId` | Descobre qual ticket Zendesk está vinculado à issue |
 | `labels`, `components`, `fixVersions`, `versions`, `issuelinks`, `subtasks`, `parent`, `attachment`, `customfield_10014`, `customfield_10008` | `{ISSUE_KEY}_metadata.json` | Metadados não-PII usados no diagnóstico de negócio |
+| `customfield_11069` | `rotina` no PDF e metadata | Rotina relacionada à issue (ex: "QIPA215 - RESULTADOS") — campo não-PII exibido no PDF |
+| `customfield_11078` | `modulo` no PDF e metadata | Módulo da classificação interna (ex: "INSPEÇÃO DE PROCESSOS (SIGAQIP)") — campo não-PII exibido no PDF |
+| `customfield_11071` | anonimização — `[EMPRESA-N]` | Nome da empresa cliente; registrado no EntityMap e nulificado na saída |
+| `customfield_11085` | anonimização — `[EMPRESA-N]` | Código de conta/CRM do cliente (string pura); mascarado em todo o texto e nulificado na saída |
+| `customfield_11053` | anonimização — `[EMPRESA-N]` | Campo identificador do cliente; mascarado em todo o texto e nulificado na saída |
+| `customfield_11038` | anonimização — `[EMPRESA-N]` | Código do cliente (customFieldOption, ex: "TFECXK"); mascarado em todo o texto e nulificado na saída |
 
 O `metadata.json` salvo junto com o PDF contém este subconjunto estruturado da issue:
 
@@ -600,6 +625,8 @@ O `metadata.json` salvo junto com o PDF contém este subconjunto estruturado da 
   "parent": null,
   "sprint": null,
   "epicKey": null,
+  "rotina": "QIPA215 - RESULTADOS",
+  "modulo": "INSPEÇÃO DE PROCESSOS (SIGAQIP)",
   "attachmentNames": [],
   "commentCount": 0,
   "zendeskTicketId": null

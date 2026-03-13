@@ -1,3 +1,6 @@
+const CREDENTIAL_ASSIGNMENT_PREFIX =
+  '\\b(?:senha|password|passwd|pwd|pass|api[-_\\s]?key|apikey|secret(?:[-_\\s]?key)?|client[-_\\s]?secret|access[-_\\s]?token|auth[-_\\s]?token|bearer[-_\\s]?token|private[-_\\s]?key|token|credencial(?:is)?|credential(?:s)?)(?:[ \\t]+[A-Za-zÀ-ÿ0-9_.\\/-]{2,}){0,3}';
+
 const RULE_DEFINITIONS = [
   { id: 'email', source: '[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}', flags: 'g', tag: '[EMAIL]' },
   { id: 'cpf', source: '\\b\\d{3}\\.?\\d{3}\\.?\\d{3}[-–]?\\d{2}\\b', flags: 'g', tag: '[CPF]' },
@@ -18,13 +21,13 @@ const RULE_DEFINITIONS = [
   },
   {
     id: 'credential-assignment',
-    source: '\\b(?:senha|password|passwd|pwd|pass|api[-_\\s]?key|apikey|secret(?:[-_\\s]?key)?|client[-_\\s]?secret|access[-_\\s]?token|auth[-_\\s]?token|bearer[-_\\s]?token|private[-_\\s]?key|token|credencial(?:is)?|credential(?:s)?)\\s*[:=]\\s*(?:"[^"\\n]+"|\'[^\'\\n]+\'|`[^`\\n]+`|[^\\s,;]+)',
+    source: `${CREDENTIAL_ASSIGNMENT_PREFIX}[ \\t]*[:=][ \\t]*(?:"[^"\\r\\n]+"|\'[^\'\\r\\n]+\'|\\\`[^\\\`\\r\\n]+\\\`|[^\\s,;]+)`,
     flags: 'gi',
     tag: '[SENHA]',
   },
   {
     id: 'credential-free-text',
-    source: '\\b(?:senha|password|api[-_\\s]?key|secret|token|credencial(?:is)?|credential(?:s)?)\\s+(?:e|eh|is|igual\\s+a|vale|seria)?\\s*(?:"[^"\\n]+"|\'[^\'\\n]+\'|`[^`\\n]+`|[A-Za-z0-9._~+/=-]{8,})',
+    source: '\\b(?:senha|password|api[-_\\s]?key|secret|token|credencial(?:is)?|credential(?:s)?)[ \\t]+(?:e|eh|is|igual[ \\t]+a|vale|seria)?[ \\t]*(?:"[^"\\r\\n]+"|\'[^\'\\r\\n]+\'|`[^`\\r\\n]+`|[A-Za-z0-9._~+/=-]{8,})',
     flags: 'gi',
     tag: '[SENHA]',
   },

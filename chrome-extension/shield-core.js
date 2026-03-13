@@ -148,7 +148,7 @@
     SIG_PATTERNS.empresa.lastIndex = 0;
     const matches = signatureBlock.matchAll(SIG_PATTERNS.empresa);
     for (const match of matches) {
-      const nome = match[1] && match[1].trim();
+      const nome = getEmpresaNameCandidate(match[1] && match[1].trim());
       if (nome && nome.length > 2) entities.empresas.push(nome);
     }
 
@@ -204,7 +204,202 @@
   ];
 
   const NOME_PROPRIO = '([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]+(?:(?:\\s(?:de|da|do|dos|das|e))?\\s[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]+){0,4})';
-  const ARTIGO = '(?:a|o|as|os|da|do|das|dos|de|um|uma)?\\s*';
+  const ARTIGO = '(?:(?:a|o|as|os|da|do|das|dos|de|um|uma)\\b\\s*)?';
+  const PORTUGUESE_COMMON_WORDS = (SHIELD.portugueseCommonWords && Array.isArray(SHIELD.portugueseCommonWords.PORTUGUESE_COMMON_WORDS))
+    ? SHIELD.portugueseCommonWords.PORTUGUESE_COMMON_WORDS
+    : [];
+  const STOPWORDS_PESSOA = new Set([
+    'metrologia', 'qualidade',
+    'inspecao', 'inspecoes', 'inspeção', 'inspeções',
+    'ensaio', 'ensaios',
+    'roteiro', 'roteiros',
+    'operacao', 'operacoes', 'operação', 'operações',
+    'laboratorio', 'laboratorios', 'laboratório', 'laboratórios',
+    'peca', 'pecas', 'peça', 'peças',
+    'produto', 'produtos',
+    'caracteristica', 'caracteristicas', 'característica', 'características',
+    'medida', 'medidas',
+    'medicao', 'medicoes', 'medição', 'medições',
+    'amostra', 'amostras',
+    'resultado', 'resultados'
+  ].map((value) => String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()));
+  const PESSOA_CONECTORES = new Set(['de', 'da', 'do', 'dos', 'das', 'e']);
+  const STOPWORDS_EMPRESA = new Set([
+    ...STOPWORDS_PESSOA,
+    ...PORTUGUESE_COMMON_WORDS,
+    'empresa', 'empresas',
+    'cliente', 'clientes',
+    'fornecedor', 'fornecedores',
+    'parceiro', 'parceiros',
+    'contratante', 'contratantes',
+    'contratada', 'contratado', 'contratadas', 'contratados',
+    'prestador', 'prestadores',
+    'representante', 'representantes',
+    'filial', 'filiais',
+    'subsidiaria', 'subsidiarias',
+    'organizacao', 'organizacoes',
+    'instituicao', 'instituicoes',
+    'fundacao', 'fundacoes',
+    'associacao', 'associacoes',
+    'cooperativa', 'cooperativas',
+    'holding', 'holdings',
+    'grupo', 'grupos',
+    'plataforma', 'plataformas',
+    'sistema', 'sistemas',
+    'portal', 'portais',
+    'produto', 'produtos',
+    'servico', 'servicos',
+    'solucao', 'solucoes',
+    'processo', 'processos',
+    'rotina', 'rotinas',
+    'resultado', 'resultados',
+    'operacao', 'operacoes',
+    'qualidade', 'laboratorio', 'laboratorios'
+  ].map((value) => String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()));
+  const EMPRESA_CONECTORES = new Set(['de', 'da', 'do', 'dos', 'das', 'e', '&']);
+
+  function isValidPessoaName(nome) {
+    if (!nome || nome.length < 3) return false;
+    if (!/^\p{Lu}\p{Ll}/u.test(nome)) return false;
+
+    const normalizedNome = String(nome)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+    return !STOPWORDS_PESSOA.has(normalizedNome);
+  }
+
+  function getPessoaNameCandidate(nome) {
+    if (!nome || String(nome).trim().length < 3) return null;
+
+    const tokens = String(nome)
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.replace(/^[^A-Za-zÀ-ÿ]+|[^A-Za-zÀ-ÿ]+$/g, ''))
+      .filter(Boolean);
+
+    const validTokens = [];
+
+    for (const token of tokens) {
+      const normalizedToken = String(token)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+      if (!validTokens.length) {
+        if (!/^\p{Lu}\p{Ll}/u.test(token)) return null;
+        if (STOPWORDS_PESSOA.has(normalizedToken)) return null;
+        validTokens.push(token);
+        continue;
+      }
+
+      if (PESSOA_CONECTORES.has(normalizedToken)) {
+        validTokens.push(normalizedToken);
+        continue;
+      }
+
+      if (/^\p{Lu}\p{Ll}/u.test(token)) {
+        validTokens.push(token);
+        continue;
+      }
+
+      break;
+    }
+
+    return validTokens.length ? validTokens.join(' ') : null;
+  }
+
+  function getUppercasePessoaNameCandidate(nome) {
+    if (!nome || String(nome).trim().length < 3) return null;
+
+    const tokens = String(nome)
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.replace(/^[^\p{L}'-]+|[^\p{L}'-]+$/gu, ''))
+      .filter(Boolean);
+
+    const validTokens = [];
+    let significantTokens = 0;
+
+    for (const token of tokens) {
+      const normalizedToken = String(token)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+      if (PESSOA_CONECTORES.has(normalizedToken)) {
+        if (significantTokens) validTokens.push(token);
+        continue;
+      }
+
+      if (!/^\p{Lu}[\p{Lu}'-]*$/u.test(token)) break;
+      if (STOPWORDS_PESSOA.has(normalizedToken)) break;
+
+      validTokens.push(token);
+      significantTokens += 1;
+    }
+
+    while (validTokens.length) {
+      const lastToken = String(validTokens[validTokens.length - 1])
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+      if (!PESSOA_CONECTORES.has(lastToken)) break;
+      validTokens.pop();
+    }
+
+    if (!significantTokens || !validTokens.length) return null;
+    return validTokens.join(' ');
+  }
+
+  function looksLikeEmpresaToken(token) {
+    return /^\p{Lu}[\p{L}\d&._'-]*$/u.test(token) || /^[A-Z\d&._'-]{2,}$/u.test(token);
+  }
+
+  function getEmpresaNameCandidate(nome) {
+    if (!nome || String(nome).trim().length < 3) return null;
+
+    const tokens = String(nome)
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.replace(/^[^\p{L}\d&._'-]+|[^\p{L}\d&._'-]+$/gu, ''))
+      .filter(Boolean);
+
+    const validTokens = [];
+    const significantTokens = [];
+
+    for (const token of tokens) {
+      const normalizedToken = String(token)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+      if (EMPRESA_CONECTORES.has(normalizedToken)) {
+        if (validTokens.length) validTokens.push(normalizedToken === '&' ? '&' : normalizedToken);
+        continue;
+      }
+
+      if (!looksLikeEmpresaToken(token)) {
+        break;
+      }
+
+      validTokens.push(token);
+      significantTokens.push(normalizedToken);
+    }
+
+    if (!significantTokens.length) return null;
+    if (significantTokens.length === 1 && STOPWORDS_EMPRESA.has(significantTokens[0])) return null;
+
+    return validTokens.length ? validTokens.join(' ') : null;
+  }
 
   const PATTERN_SUFIXO_JURIDICO = new RegExp(
     NOME_PROPRIO +
@@ -213,7 +408,7 @@
       'Assessoria|Engenharia|Construcoes|Empreendimentos|Investimentos|Participacoes|' +
       'Transportes|Logistica|Alimentos|Imoveis|Saude|Educacao|Comunicacoes|Telecomunicacoes|' +
       'Energia|Mineracao|Agro|Agropecuaria)',
-    'gi'
+    'giu'
   );
 
   function buildPattern(gatilhos) {
@@ -222,11 +417,17 @@
 
   const PATTERN_EMPRESA = buildPattern(GATILHOS_EMPRESA);
   const PATTERN_PESSOA = buildPattern(GATILHOS_PESSOA);
+  const NOME_LABELED_PERSON = '[\\p{Lu}][\\p{L}]{1,}(?:(?:[ \\t](?:de|da|do|dos|das|e))?[ \\t][\\p{Lu}][\\p{L}]{1,})*';
+  const NOME_CLIENTE_CAPS = '([\\p{Lu}][\\p{Lu}\'-]{1,}(?:(?:[ \\t](?:DE|DA|DO|DOS|DAS|E))?[ \\t][\\p{Lu}][\\p{Lu}\'-]{1,}){0,4})';
 
   const NOME_SIMPLES = '[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{1,}(?:\\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{1,})*';
   const PATTERN_LABELED_PERSON = new RegExp(
-    `\\b(?:triagem|analista|analise|revisao|aprovacao|responsavel|solicitante)\\s*:\\s*(${NOME_SIMPLES})(?:\\s*[/|]\\s*(${NOME_SIMPLES}))?`,
+    `\\b(?:triagem|triador(?:a)?|triagista|analista|analise|revisao|aprovacao|responsavel|solicitante)[ \\t]*:[ \\t]*(${NOME_LABELED_PERSON})(?:[ \\t]*[/|][ \\t]*(${NOME_LABELED_PERSON}))?`,
     'gi'
+  );
+  const PATTERN_CLIENTE_CAPS_PERSON = new RegExp(
+    `\\b(?:nome[ \\t]+)?d[oa]s?[ \\t]+client[ea][ \\t]*(?::|=|[-–—]|eh|é)?[ \\t]*${NOME_CLIENTE_CAPS}`,
+    'gu'
   );
 
   function extractContextualEntities(text) {
@@ -237,33 +438,60 @@
     PATTERN_EMPRESA.lastIndex = 0;
     const empresaMatches = text.matchAll(PATTERN_EMPRESA);
     for (const match of empresaMatches) {
-      const nome = match[match.length - 1] && match[match.length - 1].trim();
-      if (nome && nome.length > 2) empresas.add(nome);
+      const nome = getEmpresaNameCandidate(match[match.length - 1] && match[match.length - 1].trim());
+      if (nome) empresas.add(nome);
     }
 
     PATTERN_SUFIXO_JURIDICO.lastIndex = 0;
     const juridicoMatches = text.matchAll(PATTERN_SUFIXO_JURIDICO);
     for (const match of juridicoMatches) {
-      const nome = match[1] && match[1].trim();
+      const nome = getEmpresaNameCandidate(match[1] && match[1].trim());
       if (nome) empresas.add(nome);
     }
 
     PATTERN_PESSOA.lastIndex = 0;
     const pessoaMatches = text.matchAll(PATTERN_PESSOA);
     for (const match of pessoaMatches) {
-      const nome = match[match.length - 1] && match[match.length - 1].trim();
-      if (nome && nome.length > 2) pessoas.add(nome);
+      const nome = getPessoaNameCandidate(match[match.length - 1] && match[match.length - 1].trim());
+      if (nome) pessoas.add(nome);
     }
 
     PATTERN_LABELED_PERSON.lastIndex = 0;
     const labeledMatches = text.matchAll(PATTERN_LABELED_PERSON);
     for (const match of labeledMatches) {
-      if (match[1]) pessoas.add(match[1].trim());
-      if (match[2]) pessoas.add(match[2].trim());
+      const nome1 = getPessoaNameCandidate(match[1] && match[1].trim());
+      const nome2 = getPessoaNameCandidate(match[2] && match[2].trim());
+      if (nome1) pessoas.add(nome1);
+      if (nome2) pessoas.add(nome2);
+    }
+
+    PATTERN_CLIENTE_CAPS_PERSON.lastIndex = 0;
+    const clienteCapsMatches = text.matchAll(PATTERN_CLIENTE_CAPS_PERSON);
+    for (const match of clienteCapsMatches) {
+      const nome = getUppercasePessoaNameCandidate(match[1] && match[1].trim());
+      if (nome) pessoas.add(nome);
+    }
+
+    const pessoasNormalizadas = new Set(Array.from(pessoas).map((nome) => String(nome)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()));
+    for (const nome of Array.from(empresas)) {
+      const normalizedNome = String(nome)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+      if (pessoasNormalizadas.has(normalizedNome)) {
+        empresas.delete(nome);
+      }
     }
 
     return { empresas, pessoas };
   }
+
+  const CREDENTIAL_ASSIGNMENT_PREFIX =
+    '\\b(?:senha|password|passwd|pwd|pass|api[-_\\s]?key|apikey|secret(?:[-_\\s]?key)?|client[-_\\s]?secret|access[-_\\s]?token|auth[-_\\s]?token|bearer[-_\\s]?token|private[-_\\s]?key|token|credencial(?:is)?|credential(?:s)?)(?:[ \\t]+[A-Za-zÀ-ÿ0-9_.\\/-]{2,}){0,3}';
 
   const PATTERNS = [
     { rx: /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, tag: '[EMAIL]' },
@@ -278,8 +506,8 @@
     { rx: /\b\d{4}\s?\d{4}\s?\d{4}\b/g, tag: '[TITULO_ELEITOR]' },
     { rx: /\b[A-Z]{2}\d{6,7}\b/g, tag: '[PASSAPORTE]' },
     { rx: /\b(?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+[^\s,;]+/gi, tag: '[SENHA]' },
-    { rx: /\b(?:senha|password|passwd|pwd|pass|api[-_\s]?key|apikey|secret(?:[-_\s]?key)?|client[-_\s]?secret|access[-_\s]?token|auth[-_\s]?token|bearer[-_\s]?token|private[-_\s]?key|token|credencial(?:is)?|credential(?:s)?)\s*[:=]\s*(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[^\s,;]+)/gi, tag: '[SENHA]' },
-    { rx: /\b(?:senha|password|api[-_\s]?key|secret|token|credencial(?:is)?|credential(?:s)?)\s+(?:e|eh|is|igual\s+a|vale|seria)?\s*(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[A-Za-z0-9._~+/=-]{8,})/gi, tag: '[SENHA]' },
+    { rx: new RegExp(`${CREDENTIAL_ASSIGNMENT_PREFIX}[ \\t]*[:=][ \\t]*(?:"[^"\\r\\n]+"|'[^'\\r\\n]+'|\`[^\`\\r\\n]+\`|[^\\s,;]+)`, 'gi'), tag: '[SENHA]' },
+    { rx: /\b(?:senha|password|api[-_\s]?key|secret|token|credencial(?:is)?|credential(?:s)?)[ \t]+(?:e|eh|is|igual[ \t]+a|vale|seria)?[ \t]*(?:"[^"\r\n]+"|'[^'\r\n]+'|`[^`\r\n]+`|[A-Za-z0-9._~+/=-]{8,})/gi, tag: '[SENHA]' },
     { rx: /\+\d{1,3}[\s\-]?\(?\d{2}\)?[\s\-]?\d{4,5}[\s\-]?\d{4}\b/g, tag: '[TELEFONE]' },
     { rx: /https?:\/\/[^\s/]+\/(?:users?|perfil|profile|u|account|conta)\/[\w.%@+\-]{2,}/gi, tag: '[URL_USUARIO]' },
   ];

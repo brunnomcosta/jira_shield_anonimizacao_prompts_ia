@@ -8,6 +8,8 @@
  *  - Tokens são sequenciais e legíveis: [PESSOA-1], [EMPRESA-1]
  */
 
+const WB_CHARS = 'A-Za-zÃ¡Ã©Ã­Ã³ÃºÃ¢ÃªÃ®Ã´Ã»Ã£ÃµÃ Ã§ÃÃ‰ÃÃ“ÃšÃ‚ÃŠÃŽÃ”Ã›ÃƒÃ•Ã€Ã‡0-9_';
+
 export class EntityMap {
   constructor() {
     this.pessoas  = new Map(); // "joao silva" → "[PESSOA-1]"
@@ -53,12 +55,12 @@ export class EntityMap {
 
     for (const [nome, token] of sortedByLength(this.pessoas)) {
       const escaped = nome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      result = result.replace(new RegExp(escaped, 'gi'), token);
+      result = result.replace(new RegExp(`(?<![${WB_CHARS}])${escaped}(?![${WB_CHARS}])`, 'gi'), token);
     }
 
     for (const [nome, token] of sortedByLength(this.empresas)) {
       const escaped = nome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      result = result.replace(new RegExp(escaped, 'gi'), token);
+      result = result.replace(new RegExp(`(?<![${WB_CHARS}])${escaped}(?![${WB_CHARS}])`, 'gi'), token);
     }
 
     return result;

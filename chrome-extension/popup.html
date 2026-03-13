@@ -10,8 +10,8 @@
     <main class="shell popup-shell">
       <header class="hero">
         <div>
-          <h1 class="brand">SHIELD</h1>
-          <p class="subtitle">Exportação LGPD do Jira com PDF, metadata e fallback Zendesk.</p>
+          <h1 class="brand">JIRA SHIELD</h1>
+          <p class="subtitle"><b>S</b>mart <b>H</b>andler for <b>I</b>ssue <b>E</b>xport with <b>L</b>inked <b>D</b>ata</p>
         </div>
         <span class="hero-badge">Chrome</span>
       </header>
@@ -27,34 +27,43 @@
         </div>
 
         <div class="field">
-          <div class="legend">Modo de exportação</div>
+          <div class="legend">Contexto JIRA</div>
           <div class="mode-grid">
             <label class="mode-card">
-              <input type="radio" name="mode" value="full" checked>
-              <span class="mode-title">Completo</span>
-              <span class="mode-copy">Tenta anexar comentários Zendesk por proxy Jira, API direta e aba da issue.</span>
+              <input type="radio" name="mode" value="jira-only" checked>
+              <span class="mode-title">Somente JIRA</span>
+              <span class="mode-copy">Exporta só Jira + metadata. Útil para triagem rápida ou quando Zendesk não precisa entrar.</span>
             </label>
             <label class="mode-card">
-              <input type="radio" name="mode" value="jira-only">
-              <span class="mode-title">Jira only</span>
-              <span class="mode-copy">Exporta só Jira + metadata. Útil para triagem rápida ou quando Zendesk não precisa entrar.</span>
+              <input type="radio" name="mode" value="full">
+              <span class="mode-title">Completo</span>
+              <span class="mode-copy">Tenta anexar comentários Zendesk por proxy Jira, API direta e aba da issue.</span>
             </label>
           </div>
         </div>
 
-        <div class="field">
-          <div class="legend">O que sai da extensão</div>
-          <div id="capabilities" class="pill-row"></div>
-        </div>
-
         <div class="row actions">
-          <button id="run-export" class="primary" type="button">Exportar</button>
-          <button id="run-ai-doc" class="secondary" type="button">Prompt Documentacao</button>
-          <button id="run-ai-diagnostic" class="secondary" type="button">Prompt Diagnostico</button>
+          <button id="run-ai-doc" class="primary" type="button">Prompt Documentacao</button>
+          <button id="run-ai-diagnostic" class="primary" type="button">Prompt Diagnostico</button>
+          <button id="run-ai-diagnostic-sources" class="primary" type="button">Prompt Diagnostico + Contexto Fontes</button>
+          <button id="run-export" class="secondary" type="button">Exportar</button>
           <button id="open-options" class="ghost" type="button">Configurar</button>
         </div>
 
         <div id="status" class="status"></div>
+
+        <div id="source-preview" class="source-preview" hidden>
+          <div class="source-preview-header">
+            <span class="source-preview-title">Fontes locais encontradas</span>
+            <span id="source-preview-badge" class="pill"></span>
+          </div>
+          <div id="source-preview-body" class="source-preview-body"></div>
+          <div class="row source-preview-actions">
+            <button id="source-preview-confirm" class="primary" type="button">Gerar prompt</button>
+            <button id="source-preview-cancel" class="ghost" type="button">Cancelar</button>
+          </div>
+        </div>
+
         <div id="result-summary" class="result-summary"></div>
         <div id="results" class="results-cards"></div>
       </section>
@@ -69,18 +78,14 @@
         </div>
         <div id="history" class="history-list"></div>
       </section>
-
-      <section class="panel stack">
-        <div class="row panel-head">
-          <div>
-            <h2 class="section-title">Resumo do ambiente</h2>
-            <p class="section-copy">Jira, Zendesk e pasta de saída exibidos no final do popup.</p>
-          </div>
-        </div>
-        <div id="settings-summary" class="summary-grid summary-grid-vertical"></div>
-      </section>
     </main>
 
+    <footer class="popup-footnote">
+      <span class="footnote-label">O que sai da extensão:</span>
+      <div id="capabilities" class="pill-row"></div>
+    </footer>
+
+    <script src="prompt-shared.js"></script>
     <script src="prompt-templates.js"></script>
     <script src="prompt-template-diagnostic.js"></script>
     <script src="popup.js"></script>

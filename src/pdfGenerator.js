@@ -11,6 +11,7 @@
  */
 
 import { jsPDF } from 'jspdf';
+import { buildTechnicalContextTextSection } from './issueTechnicalContext.js';
 
 const MARGIN = 15;
 const PAGE_W = 210;
@@ -111,6 +112,10 @@ function sectionTitle(doc, y, label) {
 export function generatePDF(issue) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const f   = issue.fields || {};
+  const technicalContextText = buildTechnicalContextTextSection(
+    issue.technicalContext || f.technicalContext || null,
+    { includeHeading: false }
+  );
   let y = 15;
 
   // ── Banner LGPD ────────────────────────────────────────────────────────────
@@ -154,6 +159,8 @@ export function generatePDF(issue) {
     ['Reportado por',  f.reporter?.displayName   ?? '—'],
     ['Criado em',      f.created ? new Date(f.created).toLocaleString('pt-BR') : '—'],
     ['Atualizado em',  f.updated ? new Date(f.updated).toLocaleString('pt-BR') : '—'],
+    ['Módulo',         f.customfield_11069?.value ?? '—'],
+    ['Rotina',         f.customfield_11078?.value ?? '—'],
   ];
 
   const colW = (CONTENT_W - 4) / 2;
@@ -220,6 +227,14 @@ export function generatePDF(issue) {
   y += 6;
 
   // ── Comentários Jira ───────────────────────────────────────────────────────
+  if (technicalContextText) {
+    y = checkPage(doc, y, 20);
+    y = drawDivider(doc, y);
+    y = sectionTitle(doc, y, 'Contexto técnico extraído');
+    y = writeBlock(doc, technicalContextText, MARGIN, y, CONTENT_W, 8.8);
+    y += 6;
+  }
+
   const comments = f.comment?.comments ?? [];
   if (comments.length > 0) {
     y = checkPage(doc, y, 20);

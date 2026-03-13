@@ -10,7 +10,7 @@
     <main class="shell options">
       <header class="hero hero-wide">
         <div>
-          <h1 class="brand">SHIELD</h1>
+          <h1 class="brand">JIRA SHIELD</h1>
           <p class="subtitle">Configuracao da extensao Chrome para exportacao LGPD do Jira.</p>
         </div>
         <span class="hero-badge">Options</span>
@@ -23,7 +23,7 @@
             <p class="section-copy">A extensao cobre o modulo de exportacao e gera os arquivos de entrada do diagnostics.js.</p>
           </div>
         </div>
-        <div id="strategy-summary" class="summary-grid"></div>
+        <div id="strategy-summary" class="summary-grid summary-grid-vertical"></div>
         <div class="pill-row">
           <span class="pill">PDF anonimizado</span>
           <span class="pill">metadata JSON</span>
@@ -123,6 +123,58 @@
               O diagnostico com LLM, leitura de workspace local e analise ERP/mobile continuam no CLI Node.js.
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="panel stack">
+        <div class="row panel-head">
+          <div>
+            <h2 class="section-title">Workspace local para Prompt Diagnostico</h2>
+            <p class="section-copy">Opcional. O plugin pode anexar trechos de fontes locais ao Prompt Diagnostico quando o navegador tiver permissao de leitura.</p>
+          </div>
+        </div>
+
+        <div class="note-box">
+          Regra espelhada do diagnostics.js: ERP / back-end e sempre elegivel. App mobile / front-end so entra quando o ticket trouxer sinais de Minha Producao, app mobile, celular, tablet ou sinonimos. Os caminhos do <code>.env</code> deixam a configuracao visivel e sincronizada, mas o navegador so consegue ler os fontes depois que voce vincula a permissao local de leitura.
+        </div>
+
+        <div class="field">
+          <label for="projectRootDirLabel">Raiz local do projeto SHIELD (.env)</label>
+          <input id="projectRootDirLabel" type="text" readonly placeholder="Nenhuma raiz de projeto selecionada">
+          <div class="row actions">
+            <button id="pick-project-root" class="secondary" type="button">Selecionar raiz do projeto</button>
+            <button id="reload-env" class="ghost" type="button">Recarregar .env</button>
+            <button id="clear-project-root" class="ghost" type="button">Desvincular</button>
+          </div>
+          <div id="projectRootHint" class="hint">Quando disponivel, o plugin exibe automaticamente a raiz do projeto identificada no build da extensao. Ao vincular essa raiz manualmente, ele tambem passa a ler e atualizar o arquivo <code>.env</code> local desta pasta.</div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label for="workspaceErpBackendDirLabel">WORKSPACE_ERP_BACKEND_DIR</label>
+            <input id="workspaceErpBackendDirLabel" type="text" placeholder="C:/fontes/erp">
+            <div class="row actions">
+              <button id="pick-workspace-erp-backend" class="secondary" type="button">Vincular permissao de leitura</button>
+              <button id="clear-workspace-erp-backend" class="ghost" type="button">Remover permissao</button>
+            </div>
+            <div id="workspaceErpBackendHint" class="hint">Este valor deve refletir o <code>.env</code>. A permissao do navegador e gerenciada separadamente para que o plugin possa ler os fontes locais. O modo <code>Prompt Diagnostico + Contexto Fontes</code> nao prossegue sem ao menos um snippet real do ERP ou do mobile.</div>
+          </div>
+
+          <div class="field">
+            <label for="workspaceMobileFrontendDirLabel">WORKSPACE_MOBILE_FRONTEND_DIR</label>
+            <input id="workspaceMobileFrontendDirLabel" type="text" placeholder="C:/fontes/app-mobile">
+            <div class="row actions">
+              <button id="pick-workspace-mobile-frontend" class="secondary" type="button">Vincular permissao de leitura</button>
+              <button id="clear-workspace-mobile-frontend" class="ghost" type="button">Remover permissao</button>
+            </div>
+            <div id="workspaceMobileFrontendHint" class="hint">Esse valor deve refletir o <code>.env</code>. O plugin so considera esse front-end no Prompt Diagnostico quando detectar contexto mobile e quando a permissao local do navegador ja estiver vinculada.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="workspaceErpIncludeDirLabel">WORKSPACE_ERP_INCLUDE_DIR</label>
+          <input id="workspaceErpIncludeDirLabel" type="text" placeholder="C:/totvs/includes">
+          <div id="workspaceErpIncludeHint" class="hint">Este valor tambem e sincronizado com o <code>.env</code>. O plugin ainda nao usa includes locais para montar contexto, mas precisa exibir e preservar a mesma configuracao do projeto.</div>
         </div>
       </section>
 
@@ -231,8 +283,11 @@
       </section>
     </main>
 
+    <script src="prompt-shared.js"></script>
     <script src="prompt-templates.js"></script>
     <script src="prompt-template-diagnostic.js"></script>
+    <script src="generated-project-env.js"></script>
+    <script src="local-workspace.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

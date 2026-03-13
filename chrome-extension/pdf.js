@@ -66,6 +66,12 @@
     const core = SHIELD.core;
     const doc = new jsPDF({ unit: 'mm', format: 'a4' });
     const fields = issue.fields || {};
+    const technicalContextText = SHIELD.issueTechnicalContext
+      ? SHIELD.issueTechnicalContext.buildTechnicalContextTextSection(
+        issue.technicalContext || fields.technicalContext || null,
+        { includeHeading: false }
+      )
+      : '';
     let y = 15;
 
     doc.setFillColor.apply(doc, C.azulClaro);
@@ -173,6 +179,14 @@
     const descText = core.extractText(issue, 'description') || 'Sem descricao.';
     y = writeBlock(doc, descText, MARGIN, y, CONTENT_W, 9.5);
     y += 6;
+
+    if (technicalContextText) {
+      y = checkPage(doc, y, 20);
+      y = drawDivider(doc, y);
+      y = sectionTitle(doc, y, 'Contexto tecnico extraido');
+      y = writeBlock(doc, technicalContextText, MARGIN, y, CONTENT_W, 8.8);
+      y += 6;
+    }
 
     const comments = (fields.comment && fields.comment.comments) || [];
     if (comments.length > 0) {

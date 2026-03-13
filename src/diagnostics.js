@@ -16,6 +16,20 @@
 import { fileURLToPath } from 'url';
 import { dirname, resolve, join, basename, extname } from 'path';
 import dotenv from 'dotenv';
+import {
+  DIAGNOSTIC_PERSONA,
+  DIAGNOSTIC_CORE_CONSTRAINTS,
+  DIAGNOSTIC_OUTPUT_INTRO,
+  DIAGNOSTIC_OUTPUT_SECTIONS,
+} from './diagnosticPromptBase.js';
+import {
+  buildTechnicalContextPromptSection,
+  correlateTechnicalContextWithFiles,
+  extractSearchTerms as extractIssueSearchTerms,
+  flattenTechnicalReferences,
+  scorePath as scoreIssueSearchPath,
+  scoreTextLines as scoreIssueSearchTextLines,
+} from './issueTechnicalContext.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE_PATH = resolve(__dirname, '..', '.env');
@@ -703,7 +717,7 @@ function localDetect(text) {
     },
     {
       type: 'leaked_password',
-      rx: /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)\s*[:=]\s*\S+/gi,
+      rx: /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)(?:[ \t]+[A-Za-zÀ-ÿ0-9_.\/-]{2,}){0,3}[ \t]*[:=][ \t]*\S+/gi,
       severity: 'critical',
     },
     {
@@ -801,6 +815,8 @@ function detectMobileFrontendContext(pdfText, metadata = null) {
     (metadata?.labels || []).join(' '),
     (metadata?.components || []).join(' '),
     (metadata?.attachmentNames || []).join(' '),
+    ...flattenTechnicalReferences(metadata?.technicalContext, ['modules', 'identifiers', 'sourceFiles'])
+      .map((reference) => reference.value),
   ];
 
   let score = 0;
@@ -1014,6 +1030,77 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+const UPPERCASE_IDENTIFIER_STOP_WORDS = new Set([
+  'API', 'APIS', 'APP', 'CLI', 'DB', 'ERP', 'HTTP', 'HTTPS', 'HTML', 'JSON',
+  'JIRA', 'LGPD', 'LLM', 'PDF', 'PII', 'SQL', 'TXT', 'UI', 'URL', 'XML',
+]);
+
+const TECHNICAL_NAME_HINT_RX = /\b(?:user\s+function|static\s+function|function|method|class|fonte|source|programa|routine|rotina)\s+([A-Za-z_][A-Za-z0-9_.:-]{2,})/gi;
+
+function normalizeTechnicalToken(value) {
+  let normalized = String(value || '').trim();
+  if (!normalized) return '';
+
+  normalized = normalized
+    .replace(/^[`'"]+|[`'"]+$/g, '')
+    .replace(/[),;:]+$/g, '');
+
+  const parenIndex = normalized.indexOf('(');
+  if (parenIndex > 0) normalized = normalized.slice(0, parenIndex);
+
+  return normalized.trim();
+}
+
+function addTechnicalToken(target, value, allowedExtensions = new Set()) {
+  const normalized = normalizeTechnicalToken(value);
+  if (!normalized || normalized.length < 3) return;
+
+  target.add(normalized);
+
+  const dotIndex = normalized.lastIndexOf('.');
+  if (dotIndex <= 0) return;
+
+  const ext = `.${normalized.slice(dotIndex + 1).toLowerCase()}`;
+  if (allowedExtensions.size > 0 && !allowedExtensions.has(ext)) return;
+
+  const stem = normalized.slice(0, dotIndex);
+  if (stem.length >= 3) target.add(stem);
+}
+
+function isTechnicalArtifactToken(value, allowedExtensions = new Set()) {
+  const normalized = normalizeTechnicalToken(value);
+  if (!normalized || normalized.length < 3) return false;
+
+  const dotIndex = normalized.lastIndexOf('.');
+  if (dotIndex > 0) {
+    const ext = `.${normalized.slice(dotIndex + 1).toLowerCase()}`;
+    if (allowedExtensions.has(ext)) return true;
+  }
+
+  return (
+    /[0-9]/.test(normalized) ||
+    /[_.-]/.test(normalized) ||
+    /[a-z][A-Z]/.test(normalized) ||
+    /[A-Z]{2,}/.test(normalized) ||
+    /^[A-Z]{3}$/i.test(normalized)
+  );
+}
+
+function isHighSignalIdentifier(identifier) {
+  const value = String(identifier || '').trim();
+  if (!value) return false;
+
+  return (
+    /[0-9]/.test(value) ||
+    /^[A-Z][A-Z0-9]{2,}$/.test(value) ||
+    /^[A-Z][a-zA-Z0-9]{4,}[A-Z0-9][a-zA-Z0-9]*$/.test(value)
+  );
+}
+
+function getIdentifierWeight(identifier) {
+  return isHighSignalIdentifier(identifier) ? 8 : 5;
+}
+
 /**
  * Extrai termos de busca categorizados do texto do ticket.
  * Captura identificadores técnicos (camelCase, PascalCase, snake_case),
@@ -1021,6 +1108,10 @@ function escapeRegex(str) {
  */
 function extractSearchTerms(text) {
   const clean = text.replace(/\[[\w-]+\]/g, ''); // remove tokens LGPD
+  const knownFileExtensions = new Set([
+    ...WORKSPACE_EXTENSIONS,
+    ...WORKSPACE_INCLUDE_EXTENSIONS,
+  ]);
 
   const stopWords = new Set([
     'https', 'lgpd', 'issue', 'campo', 'email', 'texto', 'valor', 'false',
@@ -1035,13 +1126,18 @@ function extractSearchTerms(text) {
     .filter(w => /[A-Z]/.test(w)); // exige ao menos uma maiúscula interna
 
   // Identificadores PascalCase (classes/interfaces): ContractService, IssueKey
-  const pascal = (clean.match(/\b[A-Z][a-z][a-zA-Z0-9]{2,}\b/g) || []);
+  const pascal = (clean.match(/\b[A-Z][a-zA-Z0-9]{3,}\b/g) || [])
+    .filter((w) => /[A-Z0-9]/.test(w.slice(1)));
 
   // snake_case (colunas, campos, variáveis Python/Ruby): desconto_condicional
   const snake = (clean.match(/\b[a-z]{3,}(?:_[a-z]{2,}){1,}\b/g) || []);
 
   // SCREAMING_CASE (constantes, enums): MAX_RETRIES, STATUS_OPEN
   const screaming = (clean.match(/\b[A-Z]{2,}(?:_[A-Z0-9]{2,})+\b/g) || []);
+
+  const upperAlnum = (clean.match(/\b[A-Z][A-Z0-9]{2,}\b/g) || [])
+    .filter((w) => /\D/.test(w))
+    .filter((w) => !UPPERCASE_IDENTIFIER_STOP_WORDS.has(w));
 
   // Rotas de API: /api/v1/contracts, /users/profile
   const routes = (clean.match(/\/[a-zA-Z0-9_\-]{2,}(?:\/[a-zA-Z0-9_\-]{2,})+/g) || []);
@@ -1051,15 +1147,68 @@ function extractSearchTerms(text) {
     (clean.match(/\b[a-zA-Z]{6,}\b/g) || []).map(w => w.toLowerCase())
   )].filter(w => !stopWords.has(w));
 
+  // Frases literais de mensagens do sistema — buscadas como substring nos fontes.
+  // Captura strings entre aspas (simples ou duplas) com 10+ chars.
+  const phraseSet = new Set();
+  const qRx = /["']([^"'\n\r]{10,100})["']/g;
+  let qm;
+  while ((qm = qRx.exec(clean)) !== null) phraseSet.add(qm[1].trim());
+
+  // Captura texto após palavras-chave de mensagens do sistema (PT e EN).
+  const kwRx = /\b(?:erro|error|aviso|alerta|alert|mensagem|message|warning|warn|help|ajuda|exception|falha|fault|informa[cç][aã]o|instru[cç][aã]o)\s*[:\-–]\s*([^\n\r.]{10,100})/gi;
+  let km;
+  while ((km = kwRx.exec(clean)) !== null) phraseSet.add(km[1].trim());
+
+  const phrases = [...phraseSet].filter(p => p.length >= 10).slice(0, 10);
+
+  const namedArtifacts = new Set();
+  let nm;
+  while ((nm = TECHNICAL_NAME_HINT_RX.exec(clean)) !== null) {
+    addTechnicalToken(namedArtifacts, nm[1], knownFileExtensions);
+  }
+
+  for (const rawToken of (clean.match(/\b[A-Za-z0-9_][A-Za-z0-9_.-]{2,}\b/g) || [])) {
+    if (!isTechnicalArtifactToken(rawToken, knownFileExtensions)) continue;
+    addTechnicalToken(namedArtifacts, rawToken, knownFileExtensions);
+  }
+
+  // Termos individuais extraídos de dentro das mensagens do sistema.
+  // Palavras de 4+ chars dentro de erros/alertas/help recebem peso maior que palavras gerais.
+  const msgTermSet = new Set();
+  for (const phrase of phraseSet) {
+    for (const w of (phrase.match(/\b[a-zA-Z]{4,}\b/g) || [])) {
+      const wl = w.toLowerCase();
+      if (!stopWords.has(wl)) msgTermSet.add(wl);
+    }
+  }
+  const messageTerms = [...msgTermSet].slice(0, 30);
+
   return {
     // Peso 5 — identificadores exatos (maior precisão)
-    identifiers: [...new Set([...camel, ...pascal, ...snake, ...screaming])]
-      .filter(w => !stopWords.has(w.toLowerCase()))
+    identifiers: [...new Set([
+      ...camel,
+      ...pascal,
+      ...snake,
+      ...screaming,
+      ...upperAlnum,
+      ...namedArtifacts,
+    ])]
+      .filter((w) => {
+        const lower = w.toLowerCase();
+        return (
+          !stopWords.has(lower) &&
+          !UPPERCASE_IDENTIFIER_STOP_WORDS.has(String(w).toUpperCase())
+        );
+      })
       .slice(0, 30),
     // Peso 3 — rotas/caminhos de API
     routes: [...new Set(routes)].slice(0, 10),
     // Peso 1 — palavras gerais (maior recall, menor precisão)
     words: words.slice(0, 30),
+    // Peso 4 — frases literais de mensagens do sistema (erro, alerta, help, aviso)
+    phrases,
+    // Peso 3 — termos individuais extraídos de dentro das mensagens do sistema
+    messageTerms,
   };
 }
 
@@ -1073,9 +1222,10 @@ function scoreTextLines(lines, terms, keepMatchedLines = true) {
 
   for (const id of terms.identifiers) {
     const rx = new RegExp(`\\b${escapeRegex(id)}\\b`, 'gi');
+    const weight = getIdentifierWeight(id);
     for (let i = 0; i < lines.length; i++) {
       const hits = (lines[i].match(rx) || []).length;
-      if (hits > 0) { score += hits * 5; matchedLines.push(i); }
+      if (hits > 0) { score += hits * weight; matchedLines.push(i); }
     }
   }
 
@@ -1093,6 +1243,20 @@ function scoreTextLines(lines, terms, keepMatchedLines = true) {
     }
   }
 
+  for (const phrase of (terms.phrases || [])) {
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(phrase)) { score += 4; matchedLines.push(i); }
+    }
+  }
+
+  for (const term of (terms.messageTerms || [])) {
+    const rx = new RegExp(`\\b${escapeRegex(term)}\\b`, 'gi');
+    for (let i = 0; i < lines.length; i++) {
+      const hits = (lines[i].match(rx) || []).length;
+      if (hits > 0) { score += hits * 3; matchedLines.push(i); }
+    }
+  }
+
   return {
     score,
     matchedLines: keepMatchedLines
@@ -1101,13 +1265,51 @@ function scoreTextLines(lines, terms, keepMatchedLines = true) {
   };
 }
 
+function scorePath(filePath, terms) {
+  const normalized = String(filePath || '').replace(/\\/g, '/').toLowerCase();
+  const base = basename(normalized);
+  const dotIndex = base.lastIndexOf('.');
+  const stem = dotIndex > 0 ? base.slice(0, dotIndex) : base;
+  let score = 0;
+
+  for (const identifier of terms.identifiers) {
+    const token = String(identifier || '').toLowerCase();
+    if (!token) continue;
+
+    if (stem === token) {
+      score += isHighSignalIdentifier(identifier) ? 18 : 10;
+      continue;
+    }
+    if (base.includes(token)) {
+      score += isHighSignalIdentifier(identifier) ? 8 : 4;
+      continue;
+    }
+    if (normalized.includes(token)) {
+      score += isHighSignalIdentifier(identifier) ? 3 : 2;
+    }
+  }
+
+  for (const word of terms.words) {
+    const token = String(word || '').toLowerCase();
+    if (!token) continue;
+
+    if (stem === token) {
+      score += 4;
+    } else if (normalized.includes(token)) {
+      score += 1;
+    }
+  }
+
+  return score;
+}
+
 function scoreFileContent(content, terms, includeEntries = []) {
-  const baseScore = scoreTextLines(content.split('\n'), terms, true);
+  const baseScore = scoreIssueSearchTextLines(content.split('\n'), terms, true);
   const includeHits = [];
   let includeScore = 0;
 
   for (const entry of includeEntries) {
-    const includeResult = scoreTextLines(entry.content.split('\n'), terms, false);
+    const includeResult = scoreIssueSearchTextLines(entry.content.split('\n'), terms, false);
     includeScore += includeResult.score;
     if (includeResult.score > 0) {
       includeHits.push({ ref: entry.rel, score: includeResult.score });
@@ -1220,7 +1422,15 @@ function extractSnippets(content, matchedLines, ctx = 10, maxSnippets = 5, maxCh
  * Retorna { backend, frontend, configured, terms } onde terms são os termos usados.
  */
 function readWorkspaceFiles(pdfText, metadata = null) {
-  const terms  = extractSearchTerms(pdfText);
+  const searchText = [
+    pdfText || '',
+    metadata?.summary || '',
+    (metadata?.labels || []).join(' '),
+    (metadata?.components || []).join(' '),
+    (metadata?.attachmentNames || []).join(' '),
+  ].filter(Boolean).join('\n');
+  const technicalContext = metadata?.technicalContext || null;
+  const terms  = extractIssueSearchTerms(searchText, technicalContext);
   const frontendContext = detectMobileFrontendContext(pdfText, metadata);
   const backendDir = getWorkspaceErpBackendDir();
   const frontendDir = getWorkspaceMobileFrontendDir();
@@ -1238,8 +1448,6 @@ function readWorkspaceFiles(pdfText, metadata = null) {
   const MAX_FILES       = 15;   // arquivos incluídos no contexto final
   const MAX_TOTAL_CHARS = 22000; // limite total de chars por workspace
 
-  const allTermsFlat = [...terms.identifiers, ...terms.words];
-
   if (includeIndex) {
     console.log(
       `   ${c.gray}-> Includes ERP: ${includeIndex.indexedFiles} arquivo(s) indexados em ${includeDir}${c.reset}`
@@ -1252,11 +1460,9 @@ function readWorkspaceFiles(pdfText, metadata = null) {
     const allFiles = walkDir(dir);
 
     // ── Passe 1: score por path (sem I/O) ──────────────────────────────────
-    const byPath = allFiles.map(f => {
-      const lower = f.toLowerCase().replace(/\\/g, '/');
-      const ps = allTermsFlat.reduce((s, t) => s + (lower.includes(t.toLowerCase()) ? 2 : 0), 0);
-      return { path: f, pathScore: ps };
-    }).sort((a, b) => b.pathScore - a.pathScore);
+    const byPath = allFiles.map(f => (
+      { path: f, pathScore: scoreIssueSearchPath(f, terms) }
+    )).sort((a, b) => b.pathScore - a.pathScore);
 
     const candidates = byPath.slice(0, MAX_CANDIDATES);
 
@@ -1296,6 +1502,7 @@ function readWorkspaceFiles(pdfText, metadata = null) {
       totalChars += snippet.text.length;
       const rel = fp.replace(dir, '').replace(/\\/g, '/').replace(/^\//, '');
       loaded.push({
+        absPath: fp,
         rel,
         content: snippet.text,
         lineRanges: snippet.lineRanges,
@@ -1333,6 +1540,15 @@ function readWorkspaceFiles(pdfText, metadata = null) {
     );
     result.frontend = loadDir(frontendDir, 'Front-end mobile');
   }
+
+  result.technicalContext = technicalContext;
+  result.technicalCorrelation = correlateTechnicalContextWithFiles(
+    technicalContext,
+    [
+      ...result.backend.map((file) => ({ ...file, scopeLabel: 'Backend' })),
+      ...result.frontend.map((file) => ({ ...file, scopeLabel: 'Frontend' })),
+    ]
+  );
 
   return result;
 }
@@ -1395,11 +1611,14 @@ function buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace, o
     ? cap(sanitizeForLLM(sections.zendeskContent), zendeskLimit)
     : null;
 
+  const safeMetadata = metadata ? sanitizeStructuredData(metadata) : null;
   const backendBlock  = buildWorkspaceBlock(workspace?.backend,  'Backend');
   const frontendBlock = buildWorkspaceBlock(workspace?.frontend, 'Frontend');
   const hasWorkspace  = workspace?.configured;
-
-  const safeMetadata = metadata ? sanitizeStructuredData(metadata) : null;
+  const technicalContextBlock = buildTechnicalContextPromptSection(
+    safeMetadata?.technicalContext || workspace?.technicalContext || null,
+    workspace?.technicalCorrelation || null
+  );
   const metaBlock = safeMetadata
     ? `## Metadados estruturais do ticket\n\`\`\`json\n${JSON.stringify(safeMetadata, null, 2)}\n\`\`\`\n\n`
     : '';
@@ -1409,24 +1628,24 @@ function buildBusinessPrompt(sections, metadata, pdfPath, numpages, workspace, o
     : '';
 
   const workspaceInstruction = hasWorkspace
-    ? `- Rastreie o problema até o código-fonte nos arquivos de workspace fornecidos. Cite arquivo:linha exatos quando identificar o ponto de falha.`
+    ? `- Há fontes de workspace fornecidos. Tente identificar os fontes relacionados e os trechos que validam se o problema descrito realmente pode ocorrer e qual é a causa mais provável em fonte. Cite arquivo:linha exatos quando identificar o ponto de falha ou o ponto de decisão relevante.`
     : `- Nenhum workspace de aplicação configurado — a análise se baseará apenas no conteúdo do ticket.`;
 
-  return `Você é um engenheiro de produto sênior analisando um bug reportado por cliente.
+  const localConstraints = [
+    '- Os metadados estruturais (labels, versões, links) fornecem contexto adicional sobre o escopo do bug.',
+    '- Quando esta execução disponibilizar arquivos locais espelhados do workspace, você pode usá-los como evidência adicional além dos trechos mostrados no prompt.',
+    '- Se não houver acesso aos arquivos locais espelhados, não cite arquivo:linha fora dos trechos de workspace fornecidos.',
+    '- Quando trabalhar apenas com snippets parciais do workspace, limite suas conclusões às linhas exibidas no snippet.',
+  ];
 
-Seu objetivo é entender o problema de negócio, reconstruir a sequência de eventos que gerou o problema e identificar a provável causa raiz no produto.
+  const outputSections = DIAGNOSTIC_OUTPUT_SECTIONS
+    .map(s => s.replace('{{workspaceInstruction}}', workspaceInstruction))
+    .join('\n\n');
+
+  return `${DIAGNOSTIC_PERSONA}
 
 **IMPORTANTE:**
-- Foque no problema descrito pelo cliente — não em questões de anonimização ou LGPD.
-- A descrição da issue e os comentários Jira são a fonte primária de análise.
-- Dados pessoais foram substituídos por tokens como [PESSOA-1], [EMPRESA-1] — isso é intencional e não faz parte do problema.
-- Os metadados estruturais (labels, versões, links) fornecem contexto adicional sobre o escopo do bug.
-- Não invente fatos, datas, componentes, endpoints, tabelas, arquivos ou linhas.
-- Use somente evidências presentes no ticket, nos metadados e nos snippets de código fornecidos.
-- Se a evidência não for suficiente, escreva explicitamente "Inconclusivo com os dados fornecidos".
-- Não cite arquivo:linha fora dos trechos de workspace fornecidos.
-- Quando um arquivo do workspace aparecer parcialmente, limite suas conclusões às linhas exibidas no snippet.
-- Apresente exatamente uma hipótese principal usando o rótulo obrigatório \`Causa mais provável:\`.
+${[...DIAGNOSTIC_CORE_CONSTRAINTS, ...localConstraints].join('\n')}
 
 ---
 
@@ -1440,76 +1659,15 @@ ${mainSample}
 
 ${zendeskBlock}
 
+${technicalContextBlock}
+
 ${backendBlock}${frontendBlock}---
 
 ## Instrução de saída
 
-Produza um relatório de análise de negócio em Markdown com EXATAMENTE estas 13 seções, nesta ordem, usando subtítulos \`###\`:
+${DIAGNOSTIC_OUTPUT_INTRO}
 
-### Título do documento de análise
-Uma linha. Título objetivo que descreve o problema de negócio. Ex: "Falha no cálculo de juros para contratos renovados após migração 2.4.1".
-
-### Resumo da situação reportada
-2 a 3 frases curtas e diretas. O que o cliente reportou, em qual contexto, e qual o impacto percebido por ele. Escreva como se fosse o parágrafo de abertura de um e-mail para um gerente — sem termos técnicos, sem hipóteses, apenas o fato relatado.
-
-### Resumo da análise
-2 a 3 frases. O que a análise do ticket revelou: qual é a hipótese mais provável de causa raiz, em qual parte do sistema o problema provavelmente está localizado e o grau de confiança na hipótese (alta/média/baixa). Inclua obrigatoriamente uma linha no formato \`Causa mais provável: ...\`. Se houver mais de uma hipótese relevante, mencione a segunda brevemente.
-
-### Resumo da solução proposta
-2 a 3 frases. O que precisa ser feito para resolver o problema — sem detalhes de implementação. Descreva o resultado esperado após a correção do ponto de vista do cliente. Inclua se há necessidade de comunicação ao cliente, rollback ou ação de dados.
-
-### Riscos relacionados ao contexto do caso
-Liste os riscos de negocio mais relevantes associados ao contexto relatado pelo cliente, ao estado atual do caso e à solução proposta. Nao liste riscos genericos:
-- **Risco atual se nada for feito:** impacto operacional, financeiro, regulatorio ou de experiencia do cliente neste caso
-- **Risco de recorrencia no contexto observado:** como o problema pode voltar a ocorrer considerando o fluxo, rotina ou operacao afetada
-- **Risco de regressao ou implantacao:** cuidado necessario para corrigir este caso sem causar novo efeito colateral no mesmo contexto funcional
-- **Nivel de impacto/probabilidade:** alta, media ou baixa, com uma justificativa curta vinculada ao contexto do caso
-
-### Timeline de eventos
-Liste em ordem cronológica os eventos relevantes extraídos dos comentários e metadados:
-- Data/hora (se disponível) — evento
-
-Inclua: quando o problema começou, quando foi reportado, escalações, tentativas de reprodução, status atual.
-
-### Sintomas vs. causa raiz hipotética
-**Sintomas reportados (o que o cliente vê):**
-- Liste os sintomas descritos
-
-**Hipótese de causa raiz (o que provavelmente está errado no sistema):**
-- \`Causa mais provável:\` descreva uma única hipótese principal
-- \`Evidências principais:\` liste as evidências do ticket/metadados/código que sustentam a hipótese principal
-- Liste hipóteses ordenadas por probabilidade (mais provável primeiro)
-- Para cada hipótese, indique qual componente/módulo do sistema está envolvido
-
-### Trechos de código relacionados
-${workspaceInstruction}
-O primeiro item desta seção deve sustentar a \`Causa mais provável\`. Para cada hipótese relevante, cite arquivo:linha e inclua o trecho em bloco de código. Em cada item, explique em uma frase qual efeito observado no ticket esse trecho ajuda a explicar. Use somente referências presentes no contexto recebido. Se não houver evidência suficiente para localizar o ponto exato no código, escreva exatamente: \`Não foi possível localizar o ponto exato no código com o contexto atual.\`
-
-### Passos para reproduzir e investigar
-Liste os passos concretos para:
-1. Reproduzir o problema em ambiente de desenvolvimento/homologação
-2. Confirmar a hipótese de causa raiz (ex: logs a verificar, queries a executar, endpoints a testar)
-
-### Critérios de aceite para resolução
-Para cada hipótese de causa raiz, liste as condições verificáveis que indicam resolução:
-- [ ] Critério específico e mensurável
-- [ ] Critério de validação com o cliente
-
-### Cenários de teste regressivo
-Para cada correção provável, proponha 2-3 cenários de teste com:
-- **Cenário:** descrição do caso
-- **Entrada:** dados de teste (sem PII real)
-- **Resultado esperado:** comportamento correto
-
-Use tabelas Markdown quando aplicável.
-
-### Contexto adicional relevante
-Liste informações do ticket que podem ser úteis para a investigação:
-- Issues relacionadas (blockers, duplicatas) — com chaves e summaries
-- Versões afetadas e fix versions
-- Componentes e labels
-- Sprint/Epic de contexto
-- Attachments mencionados (nomes de arquivos)`;
+${outputSections}`;
 }
 
 /**
@@ -1524,6 +1682,133 @@ function buildWorkspaceBlock(files, label) {
     `\`\`\`\n${f.content}\n\`\`\``
   ).join('\n\n');
   return `${header}\n\n${body}\n\n`;
+}
+
+function sanitizeSourceForAgent(content) {
+  return maskSensitiveText(String(content || ''), { fallbackTag: '[REDACTED]' });
+}
+
+function writeAgentMirrorFile(rootDir, relPath, content) {
+  const filePath = join(rootDir, ...String(relPath || '').split('/').filter(Boolean));
+  fs.mkdirSync(dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, sanitizeSourceForAgent(content), 'utf-8');
+  return filePath;
+}
+
+function createDiagnosticAgentWorkspace({ workspace, sourceFiles, includePipeline = false }) {
+  const mirroredFiles = [];
+  const selectedWorkspaceFiles = [
+    ...((workspace?.backend || []).map((file) => ({ scope: 'Backend', file }))),
+    ...((workspace?.frontend || []).map((file) => ({ scope: 'Frontend', file }))),
+  ].filter(({ file }) => file?.absPath && file?.rel);
+
+  const selectedPipelineFiles = includePipeline && sourceFiles
+    ? PIPELINE_SOURCE_FILES
+      .filter(({ key }) => typeof sourceFiles[key] === 'string')
+      .filter(({ key }) => !sourceFiles[key].startsWith('// Arquivo '))
+    : [];
+
+  if (selectedWorkspaceFiles.length === 0 && selectedPipelineFiles.length === 0) {
+    return null;
+  }
+
+  const rootDir = fs.mkdtempSync(join(os.tmpdir(), 'lgpd-agent-workspace-'));
+
+  for (const { scope, file } of selectedWorkspaceFiles) {
+    try {
+      const fullContent = fs.readFileSync(file.absPath, 'utf-8');
+      const ref = `${scope}/${file.rel}`;
+      writeAgentMirrorFile(rootDir, ref, fullContent);
+      mirroredFiles.push({
+        ref,
+        kind: 'workspace',
+        totalLines: file.totalLines || fullContent.split('\n').length,
+      });
+    } catch {
+      // ignora arquivos removidos ou ilegíveis entre o scan e a execução do LLM
+    }
+  }
+
+  for (const { key, ref } of selectedPipelineFiles) {
+    const content = String(sourceFiles[key] || '');
+    writeAgentMirrorFile(rootDir, ref, content);
+    mirroredFiles.push({
+      ref,
+      kind: 'pipeline',
+      totalLines: content.split('\n').length,
+    });
+  }
+
+  if (mirroredFiles.length === 0) {
+    try { fs.rmSync(rootDir, { recursive: true, force: true }); } catch {}
+    return null;
+  }
+
+  const manifestLines = [
+    '# Workspace de diagnostico',
+    '',
+    'Arquivos locais espelhados disponiveis para inspecao nesta execucao:',
+    ...mirroredFiles.map((file) => `- ${file.ref}`),
+    '',
+    'Esses arquivos sao espelhos sanitizados dos fontes selecionados para a analise.',
+  ];
+  writeAgentMirrorFile(rootDir, 'DIAGNOSTIC_WORKSPACE.md', manifestLines.join('\n'));
+
+  return {
+    rootDir,
+    mirroredFiles,
+    workspaceFileCount: mirroredFiles.filter((file) => file.kind === 'workspace').length,
+    cleanup() {
+      try { fs.rmSync(rootDir, { recursive: true, force: true }); } catch {}
+    },
+  };
+}
+
+function buildCLIWorkspaceGuidance(agentWorkspace) {
+  if (!agentWorkspace || agentWorkspace.mirroredFiles.length === 0) {
+    return [
+      'Use exclusivamente o contexto fornecido nesta entrada.',
+      'Nao execute comandos que alterem arquivos, nao instale dependencias e nao use rede.',
+      'Se a evidencia nao for suficiente, responda "Inconclusivo com os dados fornecidos".',
+    ].join('\n');
+  }
+
+  const workspaceRefs = agentWorkspace.mirroredFiles
+    .filter((file) => file.kind === 'workspace')
+    .map((file) => `- ${file.ref}`);
+  const pipelineRefs = agentWorkspace.mirroredFiles
+    .filter((file) => file.kind === 'pipeline')
+    .map((file) => `- ${file.ref}`);
+
+  const lines = [
+    'Use o ticket, os achados locais e os arquivos locais espelhados nesta workspace de diagnostico como evidencias permitidas para a analise.',
+    'Voce pode usar comandos ou ferramentas somente leitura para abrir e ler os arquivos locais desta workspace espelhada.',
+    'Nao acesse caminhos fora desta workspace espelhada, nao edite arquivos, nao instale dependencias e nao use rede.',
+    'Quando precisar localizar a linha exata ou confirmar a hipotese principal, prefira os arquivos locais espelhados em vez das versoes compactadas do prompt.',
+  ];
+
+  if (workspaceRefs.length > 0) {
+    lines.push('', 'Arquivos de workspace disponiveis para inspecao local:', ...workspaceRefs);
+  }
+
+  if (pipelineRefs.length > 0) {
+    lines.push('', 'Arquivos locais adicionais da pipeline:', ...pipelineRefs);
+  }
+
+  lines.push(
+    '',
+    'Se a evidencia nao for suficiente, responda "Inconclusivo com os dados fornecidos".'
+  );
+
+  return lines.join('\n');
+}
+
+function buildGuidedCLIPrompt(prompt, agentWorkspace) {
+  return [
+    buildCLIWorkspaceGuidance(agentWorkspace),
+    '',
+    prompt,
+  ].join('\n');
 }
 
 /**
@@ -1543,7 +1828,7 @@ function sanitizeForLLM(text) {
     /\b\d{3}\.?\d{5}\.?\d{2}[-–]?\d\b/g,
     /\b[A-Z]{3}[-\s]?\d{4}\b/g,
     /\b[A-Z]{3}\d[A-Z]\d{2}\b/g,
-    /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)\s*[:=]\s*\S+/gi,
+    /\b(?:senha|password|passwd|pwd|pass|api[-_]?key|apikey|secret(?:[-_]key)?|client[-_]secret|access[-_]token|auth[-_]token|bearer[-_]token|private[-_]key)(?:[ \t]+[A-Za-zÀ-ÿ0-9_.\/-]{2,}){0,3}[ \t]*[:=][ \t]*\S+/gi,
     /https?:\/\/[^\s/]+\/(?:users?|perfil|profile|u|account|conta)\/[\w.%@+\-]{2,}/gi,
   ];
   return PII_PATTERNS.reduce((acc, rx) => {
@@ -1616,10 +1901,10 @@ Analise o PDF exportado por uma pipeline de anonimização e produza um relatór
 **IMPORTANTE:** A fonte primária de análise é a **descrição da issue** (seção principal abaixo).
 Os comentários Zendesk são fornecidos apenas como contexto auxiliar para entendimento do problema funcional — eles NÃO devem ser detalhados nas seções técnicas do relatório.
 - Não invente fatos, problemas, arquivos, linhas ou causas raízes fora do contexto fornecido.
-- Use somente a descrição da issue, os achados locais e os trechos de código recebidos.
+- Use somente a descrição da issue, os achados locais, os trechos de código recebidos e, quando esta execução disponibilizar arquivos locais espelhados, apenas esses arquivos como evidência adicional.
 - Se a evidência não for suficiente, escreva explicitamente "Inconclusivo com os dados fornecidos".
-- Não cite arquivo:linha fora das referências presentes no prompt.
-- Quando um arquivo do workspace aparecer parcialmente, limite suas conclusões às linhas exibidas no snippet.
+- Se não houver acesso aos arquivos locais espelhados, não cite arquivo:linha fora das referências presentes no prompt.
+- Quando trabalhar apenas com snippet parcial do workspace, limite suas conclusões às linhas exibidas no snippet.
 - Apresente uma hipótese principal usando o rótulo obrigatório \`Causa raiz mais provável:\`.
 
 ---
@@ -1858,7 +2143,7 @@ function handleProviderEvent(providerLabel, event) {
   }
 }
 
-function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile, jsonEvents = false }) {
+function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile, jsonEvents = false, cwd = process.cwd() }) {
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
@@ -1891,6 +2176,7 @@ function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile, js
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
       windowsHide: true,
+      cwd,
     });
 
     heartbeat = setInterval(() => {
@@ -1968,12 +2254,13 @@ function runCLIWithPrompt({ command, args, prompt, providerLabel, outputFile, js
  * Chama o claude CLI (Claude Code / VS Code) usando stdin.
  * Reaproveita a sessão autenticada do Claude Code / VS Code.
  */
-function callClaudeCLI(prompt) {
+function callClaudeCLI(prompt, agentWorkspace = null) {
   return runCLIWithPrompt({
     command: 'claude',
     args: ['-p', '--output-format', 'text'],
-    prompt,
+    prompt: buildGuidedCLIPrompt(prompt, agentWorkspace),
     providerLabel: LLM_PROVIDER_LABELS.claude,
+    cwd: agentWorkspace?.rootDir || process.cwd(),
   });
 }
 
@@ -1981,26 +2268,25 @@ function callClaudeCLI(prompt) {
  * Chama o Codex CLI (OpenAI Codex CLI integrado ao VS Code) em modo exec.
  * Reaproveita o login do Codex CLI / ChatGPT sem depender de API key.
  */
-function callCodexCLI(prompt) {
+function callCodexCLI(prompt, agentWorkspace = null) {
   const tmpFile = join(os.tmpdir(), `lgpd_codex_${Date.now()}.txt`);
-  const isolatedDir = join(os.tmpdir(), 'lgpd-codex-llm');
-  const guidedPrompt = [
-    'Use exclusivamente o contexto fornecido nesta entrada.',
-    'Nao execute comandos shell, nao tente inspecionar arquivos adicionais e nao navegue pelo workspace.',
-    'Se a evidencia nao for suficiente, responda "Inconclusivo com os dados fornecidos".',
-    '',
-    prompt,
-  ].join('\n');
+  const executionDir = agentWorkspace?.rootDir || join(os.tmpdir(), 'lgpd-codex-llm');
+  const guidedPrompt = buildGuidedCLIPrompt(prompt, agentWorkspace);
 
-  fs.mkdirSync(isolatedDir, { recursive: true });
+  fs.mkdirSync(executionDir, { recursive: true });
   return runCLIWithPrompt({
     command: 'codex',
-    args: ['exec', '-C', isolatedDir, '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--json', '--output-last-message', tmpFile, '-'],
+    args: ['exec', '-C', executionDir, '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--json', '--output-last-message', tmpFile, '-'],
     prompt: guidedPrompt,
     providerLabel: LLM_PROVIDER_LABELS.codex,
     outputFile: tmpFile,
     jsonEvents: true,
+    cwd: executionDir,
   });
+}
+
+function providerSupportsLocalInspection(providerKey) {
+  return providerKey === 'claude' || providerKey === 'codex';
 }
 
 /**
@@ -2141,16 +2427,21 @@ async function callClaudeAPI(prompt) {
  *   - Faz fallback também em erros de crédito, quota, autenticação ou indisponibilidade
  *   - A ordem pode ser sobrescrita por LLM_PROVIDER_ORDER no .env
  */
-async function callClaude(prompt) {
+async function callClaude(prompt, options = {}) {
   const label = (tag) => process.stdout.write(` \x1b[90m(via ${tag})\x1b[0m`);
+  const agentWorkspace = createDiagnosticAgentWorkspace({
+    workspace: options.workspace,
+    sourceFiles: options.sourceFiles,
+    includePipeline: options.includePipeline,
+  });
   const providers = {
     claude: {
       label: LLM_PROVIDER_LABELS.claude,
-      run: () => callClaudeCLI(prompt),
+      run: () => callClaudeCLI(prompt, agentWorkspace),
     },
     codex: {
       label: LLM_PROVIDER_LABELS.codex,
-      run: () => callCodexCLI(prompt),
+      run: () => callCodexCLI(prompt, agentWorkspace),
     },
     copilot: {
       label: LLM_PROVIDER_LABELS.copilot,
@@ -2164,20 +2455,31 @@ async function callClaude(prompt) {
 
   const attempts = [];
 
-  for (const providerKey of LLM_PROVIDER_ORDER) {
-    const provider = providers[providerKey];
-    if (!provider) continue;
+  try {
+    for (const providerKey of LLM_PROVIDER_ORDER) {
+      const provider = providers[providerKey];
+      if (!provider) continue;
 
-    try {
-      console.log(`   ${c.gray}↳ Tentando ${provider.label}...${c.reset}`);
-      const result = await provider.run();
-      label(provider.label);
-      return result;
-    } catch (err) {
-      const summary = summarizeProviderError(provider.label, err);
-      attempts.push(`  - ${provider.label}: ${summary}`);
-      console.log(`\n   ${c.gray}↳ ${provider.label} indisponível: ${summary}${c.reset}`);
+      try {
+        console.log(`   ${c.gray}↳ Tentando ${provider.label}...${c.reset}`);
+        const result = await provider.run();
+        label(provider.label);
+        return {
+          text: result,
+          providerKey,
+          providerLabel: provider.label,
+          allowFullWorkspaceFiles:
+            Boolean(agentWorkspace?.workspaceFileCount) &&
+            providerSupportsLocalInspection(providerKey),
+        };
+      } catch (err) {
+        const summary = summarizeProviderError(provider.label, err);
+        attempts.push(`  - ${provider.label}: ${summary}`);
+        console.log(`\n   ${c.gray}↳ ${provider.label} indisponível: ${summary}${c.reset}`);
+      }
     }
+  } finally {
+    agentWorkspace?.cleanup();
   }
 
   throw new Error(
@@ -2358,20 +2660,26 @@ async function confirmConfigurationGaps(gaps) {
   });
 }
 
-function collectAllowedEvidencePaths(workspace, includePipeline = false) {
+function collectAllowedEvidencePaths(workspace, includePipeline = false, allowFullWorkspaceFiles = false) {
   const allowed = new Map();
 
   (workspace?.backend || []).forEach((f) => {
+    const totalLines = f.totalLines || null;
     allowed.set(`Backend/${f.rel}`, {
-      lineRanges: f.lineRanges || [],
-      totalLines: f.totalLines || null,
+      lineRanges: allowFullWorkspaceFiles && totalLines
+        ? [{ start: 1, end: totalLines }]
+        : (f.lineRanges || []),
+      totalLines,
       kind: 'workspace',
     });
   });
   (workspace?.frontend || []).forEach((f) => {
+    const totalLines = f.totalLines || null;
     allowed.set(`Frontend/${f.rel}`, {
-      lineRanges: f.lineRanges || [],
-      totalLines: f.totalLines || null,
+      lineRanges: allowFullWorkspaceFiles && totalLines
+        ? [{ start: 1, end: totalLines }]
+        : (f.lineRanges || []),
+      totalLines,
       kind: 'workspace',
     });
   });
@@ -2405,9 +2713,9 @@ function isLineAllowed(lineNumber, meta) {
   return meta.lineRanges.some((range) => lineNumber >= range.start && lineNumber <= range.end);
 }
 
-function validateLLMReport(report, { mode, workspace, includePipeline = false }) {
+function validateLLMReport(report, { mode, workspace, includePipeline = false, allowFullWorkspaceFiles = false }) {
   const issues = [];
-  const allowedRefs = collectAllowedEvidencePaths(workspace, includePipeline);
+  const allowedRefs = collectAllowedEvidencePaths(workspace, includePipeline, allowFullWorkspaceFiles);
   const refRx = /\b((?:Backend|Frontend|src)\/[^\s:`]+?\.[A-Za-z0-9]+):(\d+)\b/g;
   const refs = [...report.matchAll(refRx)].map((m) => ({
     ref: m[1],
@@ -2487,7 +2795,7 @@ function buildEvidenceRepairPrompt({ mode, basePrompt, report, validation }) {
 
 REGRAS OBRIGATÓRIAS:
 - Não invente fatos, datas, arquivos, linhas, endpoints, tabelas, classes ou componentes.
-- Use apenas o contexto do prompt original abaixo.
+- Use apenas o contexto do prompt original abaixo e, quando esta execução disponibilizar arquivos locais espelhados desta mesma análise, somente esses arquivos locais como evidência adicional.
 - Mantenha a mesma estrutura/seções pedidas no prompt original.
 - Inclua obrigatoriamente uma linha iniciando com "${primaryLabel}".
 - Use somente referências arquivo:linha desta lista permitida:
@@ -2507,16 +2815,40 @@ RELATÓRIO A CORRIGIR:
 ${report}`;
 }
 
-async function ensureEvidenceBasedReport({ mode, report, basePrompt, workspace, includePipeline = false }) {
-  const firstValidation = validateLLMReport(report, { mode, workspace, includePipeline });
+async function ensureEvidenceBasedReport({
+  mode,
+  report,
+  basePrompt,
+  workspace,
+  sourceFiles = null,
+  includePipeline = false,
+  allowFullWorkspaceFiles = false,
+}) {
+  const firstValidation = validateLLMReport(report, {
+    mode,
+    workspace,
+    includePipeline,
+    allowFullWorkspaceFiles,
+  });
   if (firstValidation.ok) return report;
 
   console.log(`   ${c.yellow}↳ Ajustando resposta do LLM para regras de evidência...${c.reset}`);
-  const repaired = await callClaude(
-    buildEvidenceRepairPrompt({ mode, basePrompt, report, validation: firstValidation })
+  const repairedResult = await callClaude(
+    buildEvidenceRepairPrompt({ mode, basePrompt, report, validation: firstValidation }),
+    {
+      workspace,
+      sourceFiles,
+      includePipeline,
+    }
   );
 
-  const secondValidation = validateLLMReport(repaired, { mode, workspace, includePipeline });
+  const repaired = repairedResult.text;
+  const secondValidation = validateLLMReport(repaired, {
+    mode,
+    workspace,
+    includePipeline,
+    allowFullWorkspaceFiles: repairedResult.allowFullWorkspaceFiles,
+  });
   if (!secondValidation.ok) {
     throw new Error(
       'A resposta do LLM não atendeu às regras de evidência e foi bloqueada para evitar conteúdo especulativo.\n' +
@@ -2650,15 +2982,15 @@ async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFile
       pipelineFiles.forEach((file) => printDetail(`${file.ref}  (${file.sentAs}; modos: ${file.modes.join(', ')})`));
     }
     if (backendFiles.length > 0) {
-      printLine('Arquivos Backend:', `${backendFiles.length} arquivo(s) do workspace - somente trechos`);
+      printLine('Arquivos Backend:', `${backendFiles.length} arquivo(s) do workspace - trechos no prompt`);
       backendFiles.forEach((file) =>
-        printDetail(`Backend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho; modos: ${file.modes.join(', ')})`)
+        printDetail(`Backend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho enviado no prompt; modos: ${file.modes.join(', ')})`)
       );
     }
     if (frontendFiles.length > 0) {
-      printLine('Arquivos Frontend:', `${frontendFiles.length} arquivo(s) do workspace - somente trechos`);
+      printLine('Arquivos Frontend:', `${frontendFiles.length} arquivo(s) do workspace - trechos no prompt`);
       frontendFiles.forEach((file) =>
-        printDetail(`Frontend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho; modos: ${file.modes.join(', ')})`)
+        printDetail(`Frontend/${file.rel}  (linhas ${formatLineRanges(file.lineRanges, file.totalLines)} - trecho enviado no prompt; modos: ${file.modes.join(', ')})`)
       );
     } else if (workspace?.frontendContext && !workspace.frontendContext.enabled && getWorkspaceMobileFrontendDir()) {
       printLine('Arquivos Frontend:', 'nenhum enviado neste ticket');
@@ -2841,10 +3173,13 @@ async function confirmLLMSend({ modes, sections, metadata, workspace, sourceFile
     console.log(`    ${c.cyan}• Análise de Negócio${c.reset} — identificar causa raiz do bug e propor solução`);
   if (modes.includes('LGPD'))
     console.log(`    ${c.cyan}• Análise LGPD${c.reset}       — avaliar qualidade da anonimização e detectar vazamentos`);
-  console.log();
-  console.log(`  ${c.gray}Dados pessoais (PII) são removidos antes do envio (substituídos por [REDACTED]).${c.reset}`);
-  console.log(`  ${c.gray}O destino é determinado pela ordem configurada: ${describeLLMProviderOrder()}.${c.reset}`);
-  console.log(`  ${c.gray}Saídas sem causa principal ou sem evidência válida são rejeitadas automaticamente.${c.reset}`);
+    console.log();
+    console.log(`  ${c.gray}Dados pessoais (PII) são removidos antes do envio (substituídos por [REDACTED]).${c.reset}`);
+    console.log(`  ${c.gray}O destino é determinado pela ordem configurada: ${describeLLMProviderOrder()}.${c.reset}`);
+    if (backendFiles.length > 0 || frontendFiles.length > 0 || pipelineFiles.length > 0) {
+      console.log(`  ${c.gray}Claude CLI e Codex CLI podem inspecionar um espelho local sanitizado desses arquivos; Copilot/API continuam limitados ao prompt final.${c.reset}`);
+    }
+    console.log(`  ${c.gray}Saídas sem causa principal ou sem evidência válida são rejeitadas automaticamente.${c.reset}`);
   console.log();
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -3066,13 +3401,20 @@ async function main() {
     try {
       const promptData = lgpdPromptData;
       const prompt = promptData.prompt;
-      lgpdReport = await callClaude(prompt);
+      const llmResult = await callClaude(prompt, {
+        workspace: promptData.workspace,
+        sourceFiles,
+        includePipeline: true,
+      });
+      lgpdReport = llmResult.text;
       lgpdReport = await ensureEvidenceBasedReport({
         mode: 'lgpd',
         report: lgpdReport,
         basePrompt: prompt,
         workspace: promptData.workspace,
+        sourceFiles,
         includePipeline: true,
+        allowFullWorkspaceFiles: llmResult.allowFullWorkspaceFiles,
       });
       console.log(` ${c.green}OK${c.reset}`);
     } catch (err) {
@@ -3101,13 +3443,20 @@ async function main() {
     try {
       const promptData = businessPromptData;
       const prompt = promptData.prompt;
-      businessReport = await callClaude(prompt);
+      const llmResult = await callClaude(prompt, {
+        workspace: promptData.workspace,
+        sourceFiles: null,
+        includePipeline: false,
+      });
+      businessReport = llmResult.text;
       businessReport = await ensureEvidenceBasedReport({
         mode: 'business',
         report: businessReport,
         basePrompt: prompt,
         workspace: promptData.workspace,
+        sourceFiles: null,
         includePipeline: false,
+        allowFullWorkspaceFiles: llmResult.allowFullWorkspaceFiles,
       });
       console.log(` ${c.green}OK${c.reset}`);
     } catch (err) {
