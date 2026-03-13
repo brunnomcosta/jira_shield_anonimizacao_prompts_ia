@@ -84,10 +84,58 @@ npm install
 # 2. Configurar credenciais (assistente interativo — recomendado)
 node src/setup.js
 
+# 3. Preparar a extensão Chrome (opcional)
+npm run build:extension
+
 # Ou: copiar o template manualmente
 cp .env.example .env
 # Editar .env com seu editor de texto
 ```
+
+---
+
+## Extensao Google Chrome (MVP)
+
+O repositório agora inclui uma extensao Chrome em [chrome-extension/](./chrome-extension) para executar o **Módulo 1 — Exportação** dentro do navegador.
+
+### O que a extensao faz
+
+- Exporta issue(s) do Jira para PDF anonimizado
+- Baixa junto o `{ISSUE_KEY}_metadata.json`
+- Tenta obter comentários Zendesk por 3 caminhos:
+  - proxy do plugin Jira
+  - API direta do Zendesk
+  - scraping simples da aba Zendesk do Jira
+- Armazena histórico de auditoria no `chrome.storage.local`
+
+### O que fica fora da extensao
+
+- `src/diagnostics.js` continua no CLI Node.js
+- leitura de workspace local (`WORKSPACE_*`) continua no CLI
+- fallback Playwright / cópia de perfil do navegador não existe na extensao
+- a extensao baixa arquivos em `Downloads/<pasta-configurada>/`; ela não grava em `./output`
+
+### Como carregar no Chrome
+
+```bash
+# 1. Garantir que a dependência browser foi copiada
+npm run build:extension
+
+# 2. No Chrome
+# chrome://extensions
+# -> Developer mode
+# -> Load unpacked
+# -> selecionar a pasta ./chrome-extension
+```
+
+### Como usar
+
+1. Abra **Options** da extensao e preencha `JIRA_BASE_URL`
+2. Opcionalmente informe `JIRA_TOKEN` ou `JIRA_USER` + `JIRA_PASSWORD`
+3. Opcionalmente configure `ZENDESK_*`
+4. Abra o popup da extensao, informe uma ou mais issue keys e clique em **Exportar**
+
+> Se `JIRA_TOKEN` ficar vazio, a extensao tenta usar a sessão já aberta no navegador.
 
 ---
 
@@ -201,6 +249,7 @@ npm run diagnose -- DMANQUALI-12311 --lgpd
 | `npm run diagnose -- KEY --lgpd` | `node src/diagnostics.js KEY --lgpd` | Só análise LGPD (anonimização) |
 | `npm run diagnose -- KEY --lgpd --business` | `node src/diagnostics.js KEY --lgpd --business` | Ambas as análises |
 | `npm run setup` | `node src/setup.js` | Assistente interativo de configuração |
+| `npm run build:extension` | `node scripts/build-extension.js` | Copia o `jsPDF` para `chrome-extension/vendor/` e deixa a extensão carregável |
 
 ### Saída esperada no terminal (modo jira-only)
 
@@ -320,6 +369,75 @@ Disponível apenas no **modo completo** (sem `--jira-only`). Quando a issue poss
 | 3 | **Automação de browser** | Chrome ou Edge aberto com sessão SSO ativa |
 
 Na estratégia de browser, os dados de sessão são copiados para um diretório temporário e removidos automaticamente ao final.
+
+### Campos extraídos por origem
+
+#### 1. Integração principal via Jira REST
+
+Esta é a fonte **obrigatória** do fluxo. O CLI sempre começa pela API do Jira em `/rest/api/2/issue/{ISSUE_KEY}` e pede os campos abaixo:
+
+| Campo Jira | Nome interno / saída | Para que serve |
+|---|---|---|
+| `summary`, `status`, `priority`, `issuetype`, `project`, `created`, `updated` | `issue.fields.*` | Cabeçalho do PDF e contexto geral da issue |
+| `description` + `renderedFields.description` | `issue.fields.description` / `issue.renderedFields.description` | Texto principal da issue a ser anonimizado |
+| `comment` | `issue.fields.comment.comments` | Comentários nativos do Jira |
+| `assignee.displayName`, `reporter.displayName` | `issue.fields.assignee`, `issue.fields.reporter` | Mineração de nomes de pessoas e identificação básica no PDF |
+| `customfield_29200`, `customfield_29201`, `customfield_29202` | `fields.zdContact.nome`, `fields.zdContact.email`, `fields.zdContact.fone` | Contato do solicitante vindo do Jira; entra anonimizado no PDF |
+| `ZENDESK_JIRA_FIELD` (padrão `customfield_11086`) | `ticketId` / `zendeskTicketId` | Descobre qual ticket Zendesk está vinculado à issue |
+| `labels`, `components`, `fixVersions`, `versions`, `issuelinks`, `subtasks`, `parent`, `attachment`, `customfield_10014`, `customfield_10008` | `{ISSUE_KEY}_metadata.json` | Metadados não-PII usados no diagnóstico de negócio |
+
+O `metadata.json` salvo junto com o PDF contém este subconjunto estruturado da issue:
+
+```json
+{
+  "issueKey": "...",
+  "summary": "...",
+  "status": "...",
+  "issueType": "...",
+  "priority": "...",
+  "project": "...",
+  "projectKey": "...",
+  "created": "...",
+  "updated": "...",
+  "labels": [],
+  "components": [],
+  "fixVersions": [],
+  "affectedVersions": [],
+  "issueLinks": [],
+  "subtasks": [],
+  "parent": null,
+  "sprint": null,
+  "epicKey": null,
+  "attachmentNames": [],
+  "commentCount": 0,
+  "zendeskTicketId": null
+}
+```
+
+#### 2. Integração via browser
+
+O browser **não substitui** a leitura da issue no Jira. Ele só entra como fallback no modo completo para tentar capturar os **comentários do Zendesk** quando proxy Jira e API direta não funcionam.
+
+O extrator via browser abre a aba Zendesk da issue, tenta capturar respostas JSON de rede e, se isso falhar, faz scraping do DOM. O payload é normalizado para:
+
+| Campo normalizado | Quando costuma existir | Observação |
+|---|---|---|
+| `comments[].id` | Rede ou DOM | ID real do comentário; no scraping DOM pode virar índice sequencial |
+| `comments[].author_id` | Rede | Normalmente ausente no scraping DOM |
+| `comments[].body` | Rede ou DOM | Texto plano do comentário |
+| `comments[].html_body` | Rede | HTML original do comentário quando a resposta JSON expõe isso |
+| `comments[].public` | Rede ou DOM | Em DOM, o fallback assume `true` |
+| `comments[].created_at` | Rede ou DOM | No DOM pode vir de `<time>` ou texto visível, se existir |
+| `comments[]._authorName` | Rede ou DOM | Nome do autor quando vier embutido no payload ou visível na tela |
+| `userMap` | Rede | Mapa `author_id -> usuário`; no scraping DOM geralmente fica vazio |
+
+#### Diferença prática entre Jira e browser
+
+- A integração do **Jira** é a fonte canônica da issue: dela saem descrição, comentários Jira, contato do solicitante, ticket Zendesk vinculado e todo o `metadata.json`.
+- A integração via **browser** não busca a issue inteira nem gera metadados extras; ela só tenta preencher `fields.zdComments` com comentários do Zendesk.
+- O Jira entrega dados mais estruturados e previsíveis. O browser depende da sessão SSO ativa e do que estiver disponível na aba Zendesk naquele momento.
+- Quando o browser consegue capturar JSON de rede, o resultado é mais rico. Quando cai para scraping de DOM, alguns campos podem ficar parciais ou ausentes, especialmente `author_id`, `userMap` e datas exatas.
+- Sem o campo `ZENDESK_JIRA_FIELD` vindo do Jira, o fallback de browser nem sabe qual ticket Zendesk procurar.
 
 ---
 
