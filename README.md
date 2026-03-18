@@ -125,6 +125,71 @@ Modo --lgpd (qualidade da anonimização):
 
 Se o prompt ainda ficar grande após a compactação normal, o diagnóstico aplica um terceiro tier ultra-compacto para reduzir ainda mais o contexto antes do envio ao provedor.
 
+### Como o diagnóstico identifica arquivos de contexto do workspace
+
+O módulo usa uma **estratégia de 3 passagens** para selecionar apenas os trechos de código mais relevantes a enviar ao LLM.
+
+#### Etapa 0 — Extração de contexto técnico do issue
+
+Antes de varrer o workspace, o sistema extrai **8 categorias de referências técnicas** do issue Jira (campos, comentários, labels, componentes e anexos):
+
+| Categoria | Exemplos |
+|---|---|
+| `modules` | `SIGAWQIP`, `SIGACDA` |
+| `routines` | `U_QIPA215`, nomes de funções |
+| `sourceFiles` | caminhos e nomes de arquivos |
+| `identifiers` | CamelCase, PascalCase, snake_case |
+| `routes` | endpoints REST (`/api/v1/...`) |
+| `dbArtifacts` | tabelas, colunas, views |
+| `uiArtifacts` | elementos de tela |
+| `messages` | mensagens de erro/sistema |
+
+Cada referência recebe um nível de confiança: `explicit` (peso 3) > `metadata` (peso 2) > `heuristic` (peso 1).
+
+#### Passagem 1 — Pré-filtro por caminho (sem I/O)
+
+- Pontua **todos os arquivos do workspace** apenas pelo nome e caminho, sem abri-los
+- Ex.: `calcularJuros.js` recebe pontuação alta se `calcularJuros` foi extraído do issue
+- Identificadores PascalCase e numéricos recebem bônus extra de relevância
+- Seleciona os **top 80 candidatos** (`MAX_CANDIDATES`)
+
+#### Passagem 2 — Pontuação por conteúdo (com I/O)
+
+- Lê apenas os 80 candidatos pré-filtrados
+- Aplica regex com pesos por categoria no conteúdo de cada arquivo:
+  - Identificadores: peso 5–8
+  - Rotas: peso 3
+  - Frases literais: peso 4
+  - Palavras genéricas: peso 1
+- Fórmula: `score = pathScore × 2 + contentScore`
+  - O path score tem peso **2×** — convenção de nomes é mais confiável que ocorrências textuais
+- Seleciona os **top 15 arquivos** (`MAX_FILES`)
+
+#### Passagem 3 — Extração de trechos
+
+- Para cada linha com match, expande **±10 linhas de contexto**
+- Mescla intervalos sobrepostos
+- Limita a 5 trechos por arquivo e 3.000 chars por arquivo
+- Resultado: trechos com ranges explícitos, ex.: `L48-83`, `L150-175`
+
+#### Detecção de contexto mobile
+
+O workspace frontend só é incluído se o ticket apresentar sinais suficientes (score ≥ 3) de termos como `app mobile`, `android`, `ionic`, `celular`, etc. Isso evita incluir código frontend desnecessariamente em tickets de back-end.
+
+#### Includes TOTVS (`.prw` / `.prx` / `.tlpp`)
+
+Para fontes TOTVS, o sistema pré-indexa todos os arquivos `.ch` do `WORKSPACE_ERP_INCLUDE_DIR` e resolve os `#include` das primeiras 80 linhas de cada fonte. O conteúdo dos headers é incluído na pontuação de conteúdo — mas o trecho enviado ao LLM continua sendo apenas do fonte principal.
+
+#### Limites de configuração
+
+| Parâmetro | Valor padrão |
+|---|---|
+| Candidatos lidos no passo 2 | 80 arquivos |
+| Arquivos incluídos no prompt | 15 arquivos |
+| Total de chars no workspace | 22.000 |
+| Chars backend / frontend | 9.000 / 4.500 |
+| Arquivos backend / frontend | 6 / 4 |
+
 ---
 
 ## Pré-requisitos
